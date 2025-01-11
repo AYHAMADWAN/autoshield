@@ -1,0 +1,45 @@
+#!/usr/bin/env python3
+
+import argparse
+from rich import print
+
+def scan():
+    ssh_config_path = '/etc/ssh/sshd_config'
+    with open(ssh_config_path, 'r') as f:
+        message = ''
+        for line in f:
+            line = line.strip()
+
+            if line.startswith('#PermitRootLogin') or line.startswith('PermitRootLogin'):
+                value = line.split()[1]
+                if value == 'no':
+                    message = f'[bold red]PermitRootLogin is set to : {value}[/bold red]'
+                elif value == 'prohibit-password':
+                    message = f'[dark_orange]PermitRootLogin is set to : {value}[/dark_orange]'
+
+            else:
+                #print(line)
+                pass
+
+        print(message)
+
+                
+
+def ssh_fix():
+    pass
+
+parser = argparse.ArgumentParser()
+
+parser.add_argument('--password', '-p', action='store_true', help='Run a password misconfigurations scan')
+parser.add_argument('--permission', '-m', action='store_true', help='Run a file permissions scan on the system')
+parser.add_argument('--port', '-o', action='store_true', help='Run an open ports scan')
+parser.add_argument('--config', '-c', action='store_true', help='Run a misconfiguration scan on SSH, FTP and Apache2 config files')
+parser.add_argument('--software', '-s', action='store_true', help='Run a software version scan for outdated software')
+parser.add_argument('--firewall', '-f', action='store_true', help='Run a firewall rule scan')
+parser.add_argument('--all', '-a', action='store_true', help='Run a full scan encompassing all of the above')
+args = parser.parse_args() 
+
+if args.ssh_fix is not None:
+    ssh_fix()
+else:
+    scan()
