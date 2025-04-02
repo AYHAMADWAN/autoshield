@@ -21,9 +21,10 @@ parser.add_argument('-c', '--config', help='desc', action='store_true')
 parser.add_argument('-m', '--permission', help='desc', action='store_true')
 parser.add_argument('-o', '--port', help='desc', action='store_true')
 parser.add_argument('-a', '--all', help='desc', action='store_true')
+parser.add_argument('-r', '--remote', help='desc', action='store_true')
 args = parser.parse_args()
 
-print(vars(args))
+#print(vars(args))
 
 
 
@@ -40,13 +41,15 @@ def perm_scan():
 def port_scan():
     ports.main()
 
+def remote_scan():
+    passwords.check_pam_config(True)
 
 if args.passwords:
-    print('[#0af712]Scanning Password files..[/]')
+    print('🔍 Scanning password files for security issues...\n')
     pass_scan()
 
 if args.config:
-    print('=' * 80)
+    #print('=' * 80)
     config_scan()
 
 if args.permission:
@@ -57,11 +60,15 @@ if args.port:
     print('=' * 80)
     port_scan()
 
+if args.remote:
+    print('=' * 80)
+    remote_scan()
+
 if args.all:
-    print('[#0af712]Scanning Password files..[/]')
+    print('🔍 Scanning password files for security issues...\n')
     pass_scan()
 
-    print('=' * 80)
+    #print('=' * 80)
     config_scan()
 
     print('=' * 80)

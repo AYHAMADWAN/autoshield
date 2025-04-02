@@ -1,25 +1,77 @@
 import os
 import subprocess
+import passwords as ps
+
+ssh_config_file = "/etc/ssh/sshd_config"
+
+SSH_RULES = [
+    {
+        'rule': 'PermitRootLogin Yes',
+        'message': "PermitRootLogin should be 'no'.",
+        'file': ssh_config_file,
+        'key': 'PermitRootLogin',
+        'details': 'Prevents direct root access, reducing attack risk.'
+    },
+    {
+        'rule': 'PasswordAuthentication yes',
+        'message': "PasswordAuthentication should be 'no'. Use SSH keys instead.",
+        'file': ssh_config_file,
+        'key': 'PasswordAuthentication',
+        'details': 'Passwords are vulnerable to brute-force attacks; use SSH keys.'
+    },
+    {
+        'rule': 'X11Forwarding yes',
+        'message': "X11Forwarding should be 'no' to prevent remote GUI vulnerabilities.",
+        'file': ssh_config_file,
+        'key': 'X11Forwarding',
+        'details': 'Reduces exposure to X11-based remote exploits.'
+    },
+    {
+        'rule': 'AllowTcpForwarding yes',
+        'message': "AllowTcpForwarding should be 'no' to block unauthorized tunneling.",
+        'file': ssh_config_file,
+        'key': 'AllowTcpForwarding',
+        'details': 'Prevents SSH from being used for unauthorized tunneling.'
+    },
+    {
+        'rule': 'MaxAuthTries < 3',
+        'message': "MaxAuthTries should be set to 3 or lower.",
+        'file': ssh_config_file,
+        'key': 'MaxAuthTries',
+        'details': 'Limits brute-force attempts on SSH authentication.'
+    }
+]
+
 
 # Function to check SSH configurations
 def check_ssh_config():
     issues = []
     ssh_config_file = "/etc/ssh/sshd_config"
 
-    with open(ssh_config_file, "r") as file:
+    with open(ssh_config_file, "r") as file: # <----------------- HANDLE ERRORS LIKE FILE NOT FOUND
         lines = file.readlines()
-
+    
     for line in lines:
-        if "PermitRootLogin yes" in line:
-            issues.append("PermitRootLogin should be 'no'.")
-        if "PasswordAuthentication yes" in line:
-            issues.append("PasswordAuthentication should be 'no'. Use SSH keys instead.")
-        if "X11Forwarding yes" in line:
-            issues.append("X11Forwarding should be 'no' to prevent remote GUI vulnerabilities.")
-        if "AllowTcpForwarding yes" in line:
-            issues.append("AllowTcpForwarding should be 'no' to block unauthorized tunneling.")
-        if "MaxAuthTries" in line and int(line.split()[1]) > 3:
-            issues.append("MaxAuthTries should be set to 3 or lower.")
+        for rule in SSH_RULES:
+            if len(rule['rule'].split()) == 2:
+                if rule['rule'] in line:
+                    issues.append({
+                        'message': rule['message'],
+                        'file': rule['file'],
+                        'key': rule['key'],
+                        'details': rule['details']
+                    })
+            elif len(rule['rule'].split()) == 3 and len(line.split()) > 1 and line.split()[-1].isdigit():
+                split_rule = rule['rule'].split()
+                if split_rule[1] == '<':
+                    if split_rule[0] in line and int(line.split()[-1]) > int(split_rule[2]):
+                        issues.append({
+                        'message': rule['message'],
+                        'file': rule['file'],
+                        'key': rule['key'],
+                        'details': rule['details']
+                    })
+
 
     return issues
 
@@ -98,9 +150,11 @@ def main():
 
     # Display found issues
     if ssh_issues:
-        print("\n🚨 SSH Misconfigurations Found:")
+        # print("\n🚨 SSH Misconfigurations Found:")
+        # for issue in ssh_issues:
+        #     print(f"  - {issue}")
         for issue in ssh_issues:
-            print(f"  - {issue}")
+            ps.report('misconfig', issue['message'], issue['file'], issue['key'], issue['details'])
 
     if apache_issues:
         print("\n🚨 Apache Misconfigurations Found:")
