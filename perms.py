@@ -15,10 +15,18 @@ def has_incorrect_permissions(file_path, correct_mode):
     except Exception as e:
         return False
 
-def find_world_writable_files(root_dir="/home/linux/"):
+def find_world_writable_files(shutdown_event, root_dir="/"): # try to make it concurrent <-----
     world_writable_files = []
     for root, _, files in os.walk(root_dir):
+        # handle shutdowns
+        if shutdown_event.is_set():
+                break
+            
         for file in files:
+            # handle shutdowns
+            if shutdown_event.is_set():
+                break
+
             file_path = os.path.join(root, file)
             if is_world_writable(file_path):
                 world_writable_files.append(file_path)
@@ -49,9 +57,10 @@ def fix_permissions(file_path, correct_mode):
     except Exception as e:
         print(f"Failed to fix permissions for {file_path}: {e}")
 
-def main():
-    print("Scanning for world-writable files...")
-    ww_files = find_world_writable_files()
+def main(shutdown_event):
+    
+    #print("Scanning for world-writable files...")
+    ww_files = find_world_writable_files(shutdown_event)
     if ww_files:
         print("\nWorld-writable files found:")
         for f in ww_files:

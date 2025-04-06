@@ -3,6 +3,21 @@ import sys
 import remote
 from rich import print
 
+# inputs:
+# * if not remote: *
+# pam directory path | default = /etc/pam.d
+# pam config file path | default = /etc/pam.conf
+#
+# * if remote, the above plus: *
+# ip address
+# username
+# password (if no keypath)
+# key path (if no password)
+#
+# output:
+# report function
+
+
 SECURITY_RULES = [
     {
         'module': 'pam_unix.so',
@@ -49,7 +64,10 @@ SECURITY_RULES = [
     }
 ]
 
+# *********************************** OUTPUT ***********************************
 def report(types, value1, value2, value3, value4):
+    """ PRINTED OUTPUT """
+    
     if types == 'password':
         print(f"""[red][PASSWORD][/red] [#f01f23]{value1}[/#f01f23]
     [cyan]File:[/cyan]    [#990fbf]{os.path.dirname(value2)}/[/#990fbf][#c31ff0]{os.path.basename(value2)}[/#c31ff0]
@@ -61,10 +79,12 @@ def report(types, value1, value2, value3, value4):
     [cyan]File:[/cyan]    [#990fbf]{os.path.dirname(value2)}/[/#990fbf][#c31ff0]{os.path.basename(value2)}[/#c31ff0]
     [cyan]Key:[/cyan]     [#1fc6f0]{value3}[/#1fc6f0]
     [cyan]Details:[/cyan] [#f0ae1f]{value4}[/#f0ae1f]\n\n""")
-        
+
+# *******************************************************************************
 
 def parse_pam_line(line, is_pam_conf):
-    """ PARSE A LINE FROM PAM CONFIG FILE """
+    """ PARSE A LINE FROM PAM CONFIG FILE AND RETURN IT AS A LIST"""
+
     parts = line.strip().split()
     if not parts or parts[0].startswith('#'):
         return None
@@ -110,6 +130,9 @@ def parse_pam_line(line, is_pam_conf):
     }
 
 def get_pam_file_issues(file, is_pam_conf, filepath):
+    """TAKES A FILE NAME, WHETHER IT'S THE PAM CONF FILE AND ITS PATH
+        TO CHECK IT FOR ANY MISCONFIUGRATIONS AND RETURN THEM AS AN ARRAY OF LISTS"""
+
     issues = []
     for line_num, line in enumerate(file, 1):
         parsed = parse_pam_line(line, is_pam_conf)
@@ -171,7 +194,10 @@ def get_pam_file_issues(file, is_pam_conf, filepath):
     return issues
 
 def check_pam_config(is_remote=False):
-    """CHECK PAM CONFIG AGAINST RULES"""
+    """GET A LIST OF FILES TO SCAN FOR MISCONFIGURATIONS (FROM PAM.D AND THE CHOSEN PAM.CONF FILE)
+        THEN SEND EACH FILE TO THE get_pam_file_issues FUNCTION TO GET THE ISSUES AND ADD EACH ISSUE
+        TO THE ARRAY OF LISTS CALLED issues THEN CALL THE REPORT FUNCTION TO OUTPUT THE ISSUES"""
+
     issues = []
 
     if is_remote:

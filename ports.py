@@ -1,6 +1,8 @@
 import socket
 import threading
 import re
+import time
+from concurrent.futures import ThreadPoolExecutor
 
 def scan_port(target, port, timeout, open_ports):
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -10,10 +12,13 @@ def scan_port(target, port, timeout, open_ports):
         open_ports.append(port)
     s.close()
 
-def scan_ports(target, port_range, timeout=0.5):
+def scan_ports(shutdown_event, target, port_range, timeout=0.5):
     open_ports = []
     threads = []
     for port in port_range:
+        if shutdown_event.is_set():
+            print(f"Stopped at port: {port}")
+            break
         thread = threading.Thread(target=scan_port, args=(target, port, timeout, open_ports))
         threads.append(thread)
         thread.start()
@@ -23,9 +28,13 @@ def scan_ports(target, port_range, timeout=0.5):
     
     return open_ports
 
-def identify_services(target, ports):
+def identify_services(shutdown_event, target, ports):
     services = {}
     for port in ports:
+        # handle shutdowns
+        if shutdown_event.is_set():
+                print(f"Stopped at service port: {port}")
+                break
         try:
             service = socket.getservbyport(port)
         except OSError:
@@ -39,7 +48,7 @@ def is_valid_ip(ip):
         return all(0 <= int(octet) <= 255 for octet in ip.split("."))
     return False
 
-def main():
+def main(shutdown_event):
     target = '127.0.0.1' #input("Enter target IP: ")
     while not is_valid_ip(target):
         print("Invalid IP address. Please enter a valid IPv4 address.")
@@ -47,20 +56,25 @@ def main():
     
     start_port = int(input("Enter start port (default 1): ") or 1)
     end_port = int(input("Enter end port (default 65535): ") or 65535)
+    start = time.time() # <---------------------------------------------------------------------------- TIME
     port_range = range(start_port, end_port + 1)  # Allow user-specified port range
     timeout = 0.5 #float(input("Enter timeout value (default 0.5s): ") or 0.5)
-    
+
     print("Scanning for open ports...")
-    open_ports = scan_ports(target, port_range, timeout)
+
+    open_ports = scan_ports(shutdown_event, target, port_range, timeout)
     if open_ports:
         print(f"Open ports: {open_ports}")
         
         print("Identifying services...")
-        services = identify_services(target, open_ports)
+        services = identify_services(shutdown_event, target, open_ports)
         for port, service in services.items():
             print(f"Port {port}: {service}")
     else:
         print("No open ports found.")
+    
+    end = time.time() # <---------------------------------------------------------------------------- TIME
+    print("EXECUTION TIME: {:.10f}".format(end-start))
 
 
 

@@ -66,7 +66,7 @@ def get_remote_file(sftp, remote_file_path):
 
     with sftp.open(remote_file_path, 'r') as file:
         content = file.read().decode()
-        return io.StringIO(content)
+        return io.StringIO(content) # <----------------------------- CHECK THIS LATER
 
 def close_ssh_con(ssh, sftp):
     ssh.close()
