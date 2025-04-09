@@ -71,8 +71,6 @@ def check_ssh_config():
                         'key': rule['key'],
                         'details': rule['details']
                     })
-
-
     return issues
 
 # Function to fix SSH configurations

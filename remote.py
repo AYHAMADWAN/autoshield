@@ -3,74 +3,86 @@ import stat
 import os
 import io
 
-def sftp_isdir(sftp, path):
-    # check if the path is a valid directory
-    #print(path)
-    try:
-        return stat.S_ISDIR(sftp.stat(path).st_mode)
-    except FileNotFoundError:
-        print('Remote Directory:', path, 'Not Found')
-        return False
-    except Exception as e:
-        print('Remote Directory Error:', e)
-        return False
 
-def sftp_isfile(sftp, path):
-    #print(path)
-    try:
-        return stat.S_ISREG(sftp.stat(path).st_mode)
-    except FileNotFoundError:
-        print('Remote File:', path, 'Not Found')
-        return False
-    except Exception as e:
-        print('Remote File Error:', e)
-        return False
-
-
-def get_remote_file_list(host, user, remote_dir_path=None, remote_file_path=None, password=None, key_path=None):
-    file_list = []
-    ssh = paramiko.SSHClient()
-    ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy()) # make a choice for this
-
-    try:
-        # if the key path was provided use it, otherwise password
-        if key_path:
-            ssh.connect(host, username=user, key_filename=key_path)
-        else:
-            ssh.connect(host, username=user, password=password)
-        
-        sftp = ssh.open_sftp() # check how this works
-
-        # check for directory errors:
-        if remote_dir_path and not sftp_isdir(sftp, remote_dir_path):
+class RemoteDeviceHandling:
+    def __init__(self, host, user, remote_dir_path, remote_file_path, password=None, key_path=None):
+        self.host = host
+        self.username = user
+        self.remote_dir_path = remote_dir_path
+        self.remote_file_path = remote_file_path
+        if (password and key_path) or (not password and not key_path):
             return None
-        
-        file_list = [os.path.join(remote_dir_path, f) for f in sftp.listdir(remote_dir_path)]#sftp.listdir(remote_dir_path)
-        if remote_file_path:
-            file_list.append(remote_file_path)
-        
-        # check each of the files inside the list for errors:
-        for file in file_list:
-            if not sftp_isfile(sftp, file):
-                return None
+        self.password = password
+        self.key_path = key_path
 
-        return file_list, sftp, ssh
-    except Exception as e:
-        print('Error:', e)
+        self.ssh = paramiko.SSHClient()
+        self.ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy()) # make a choice for this
+        # if the key path was provided use it, otherwise password
+        if self.key_path:
+            self.ssh.connect(self.host, username=self.username, key_filename=self.key_path)
+        else:
+            self.ssh.connect(self.host, username=self.username, password=self.password)
+        self.sftp = self.ssh.open_sftp() # check how this works
 
+    def sftp_isdir(self, path):
+        # check if the path is a valid directory
+        try:
+            return stat.S_ISDIR(self.sftp.stat(path).st_mode)
+        except FileNotFoundError:
+            print('Remote Directory:', path, 'Not Found')
+            return False
+        except Exception as e:
+            print('Remote Directory Error:', e)
+            return False
 
-def get_remote_file(sftp, remote_file_path):
-    # check the file for errors:
-    if not sftp_isfile(sftp, remote_file_path):
-        return None
+    def sftp_isfile(self, path):
+        try:
+            return stat.S_ISREG(self.sftp.stat(path).st_mode)
+        except FileNotFoundError:
+            print('Remote File:', path, 'Not Found')
+            return False
+        except Exception as e:
+            print('Remote File Error:', e)
+            return False
 
-    with sftp.open(remote_file_path, 'r') as file:
-        content = file.read().decode()
-        return io.StringIO(content) # <----------------------------- CHECK THIS LATER
+    def get_remote_file_list(self):
+        file_list = []
+        try:
+            # check for directory errors:
+            for dir_path in self.remote_dir_path:
+                if dir_path and not self.sftp_isdir(dir_path):
+                    return None
+            
+            for dir_path in self.remote_dir_path:
+                file_list.extend([os.path.join(dir_path, f) for f in self.sftp.listdir(dir_path)])#sftp.listdir(remote_dir_path)
+            
+            for filepath in self.remote_file_path:
+                file_list.append(filepath)
+            
+            # check each of the files inside the list for errors:
+            for file in file_list:
+                # ignore directories
+                if self.sftp_isdir(file):
+                    file_list.remove(file)
+                # check files errors
+                elif not self.sftp_isfile(file):
+                    return None
+            return file_list
+        except Exception as e:
+            print('Error:', e)
 
-def close_ssh_con(ssh, sftp):
-    ssh.close()
-    sftp.close()
+    def get_remote_file(self, remote_file_path):
+        # check the file for errors:
+        if not self.sftp_isfile(remote_file_path):
+            return None
+
+        with self.sftp.open(remote_file_path, 'r') as file: # add error handling here <-------
+            content = file.read().decode()
+            return io.StringIO(content) # <----------------------------- CHECK THIS LATER
+
+    def close_ssh_con(self):
+        self.ssh.close()
+        self.sftp.close()
 
 
 # input by the user

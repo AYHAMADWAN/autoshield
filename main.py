@@ -1,10 +1,9 @@
 import os
 import sys
 import argparse
-import passwords
-import configs
-import perms
-import ports
+from fileScans import PAMConfScan, FileConfScan, PermissionScan
+from networkScans import PortScan
+# import ports
 from rich import print
 import time
 import signal
@@ -40,19 +39,23 @@ signal.signal(signal.SIGTERM, handle_signal)
 
 
 def pass_scan():
-    passwords.check_pam_config()
+    # passwords.check_pam_config()
+    PAMConfScan()
 
 def config_scan():
-    configs.main() # FIX THIS TO CHECK IF THE CONFIG FILES EXIST
+    # configs.main() # FIX THIS TO CHECK IF THE CONFIG FILES EXIST
+    FileConfScan()
 
 def perm_scan():
-    perms.main(shutdown_event)
+    PermissionScan(shutdown_event, root_dir='/')
 
 def port_scan():
-    ports.main(shutdown_event)
+    # ports.main(shutdown_event)
+    PortScan(shutdown_event)#, target='192.168.1.9')
 
 def remote_scan():
-    passwords.check_pam_config(True)
+    PAMConfScan(True)
+    FileConfScan(True)
 
 with ThreadPoolExecutor(max_workers=10) as executor:
     if args.permission:
@@ -77,7 +80,7 @@ with ThreadPoolExecutor(max_workers=10) as executor:
 
     if args.remote:
         # print('=' * 80)
-        print('🔍 Scanning remote host password files for security issues...\n')
+        print('🔍 Scanning remote host password and config files for security issues...\n')
         remote_scan()
 
 if args.all:
