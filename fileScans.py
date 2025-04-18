@@ -1,7 +1,8 @@
 import os
 import subprocess
 import sys
-from remote import RemoteDeviceHandling
+from other import RemoteDeviceHandling
+from other import setup_logger
 from rich import print
 import stat
 
@@ -18,6 +19,10 @@ import stat
 #
 # output:
 # report function
+
+
+# set up the logging handler:
+logger = setup_logger()
 
 
 SECURITY_RULES = [
@@ -123,16 +128,26 @@ class PAMConfScan:
         self.issues = []
         self.pam_dir = pam_dir
         self.pam_conf_file = pam_conf_file
-        if self.is_remote:
-            self.remote_connection = RemoteDeviceHandling("192.168.1.4", "kali", remote_dir_path = [self.pam_dir], remote_file_path = [self.pam_conf_file, '/etc/passwd'], password='kali')
-        
-        self.check_pam_config()
 
-        if self.issues:
-            for issue in self.issues:
-                report('password', issue['message'], issue['file'], issue['line'], issue['details'])
-        else:
-            print('No issues found.')
+        # Establish a remote connection with the target
+        if self.is_remote:
+            try:
+                self.remote_connection = RemoteDeviceHandling("192.168.1.6", "kali", remote_dir_path = [self.pam_dir], remote_file_path = [self.pam_conf_file, '/etc/passwd'], password='kali')
+            except (ValueError, ConnectionError, TimeoutError, RuntimeError) as e:
+                logger.error(str(e))
+                print(e)
+                return
+        
+        # Run the scan and check for any errors
+        try:
+            self.check_pam_config()
+            if self.issues:
+                for issue in self.issues:
+                    report('password', issue['message'], issue['file'], issue['line'], issue['details'])
+            else:
+                print('No issues found.')
+        except (FileNotFoundError, IOError, RuntimeError) as e:
+            print(e)
 
     def parse_pam_line(self, line, is_pam_conf):
         """ PARSE A LINE FROM PAM CONFIG FILE AND RETURN IT AS A LIST"""
@@ -147,15 +162,28 @@ class PAMConfScan:
         for part in parts:
             if part.startswith('['):
                 inside_brackets = []
-                inside_brackets.append(part.strip('['))
+                if part.endswith(']'):
+                    inside_brackets.append(part.strip('[]'))
+                    merged_parts.append(inside_brackets)
+                    inside_brackets = None
+                else:
+                    inside_brackets.append(part.strip('['))
+
             elif part.endswith(']'):
                 inside_brackets.append(part.strip(']'))
                 merged_parts.append(inside_brackets)
                 inside_brackets = None
+            elif part.startswith('#'):
+                break
             elif inside_brackets is not None:
                 inside_brackets.append(part)
             else:
                 merged_parts.append(part)
+
+        # handle malformed line with no closing bracket ']'   
+        if inside_brackets is not None:
+            return 'malformed'
+        
         parts = merged_parts
         
         if is_pam_conf:
@@ -171,7 +199,10 @@ class PAMConfScan:
             args = parts[3:]
         
         # Get module name from path
-        module_name = os.path.basename(module)
+        try:
+            module_name = os.path.basename(module)
+        except Exception:
+            return 'malformed'
         
         return {
             'service': service,
@@ -182,7 +213,15 @@ class PAMConfScan:
         }
 
     def evaluate_params(self, rule, params, filepath, line_num):
-        issues = []
+        if not isinstance(rule, dict) or not isinstance(params, dict):
+            self.issues.append({
+                'file': filepath,
+                'line': line_num,
+                'details': f'Incorrect syntax: {line}',
+                'message': f'Malformed PAM Line'
+            })
+            return
+
         # Check required params
         required = rule.get('required_params', {})
         for param, expected in required.items():
@@ -222,6 +261,15 @@ class PAMConfScan:
             parsed = self.parse_pam_line(line, is_pam_conf)
             if not parsed:
                 continue
+            elif parsed == 'malformed':
+                #print(parsed)  
+                self.issues.append({
+                    'file': filepath,
+                    'line': line_num,
+                    'details': f'Incorrect syntax: {line}',
+                    'message': f'Malformed PAM Line' 
+                })
+                continue
 
             service = parsed['service'] if is_pam_conf else os.path.basename(filepath)
             type_ = parsed['type']
@@ -253,6 +301,7 @@ class PAMConfScan:
         if self.is_remote:
             # pam_files = get_remote_file_list("192.168.1.2", "kali", self.pam_dir, self.pam_conf_file, password='kali') # values should be inputs
             pam_files = self.remote_connection.get_remote_file_list()
+                
         else:
             pam_files = []
             # Get PAM files
@@ -267,15 +316,21 @@ class PAMConfScan:
         """USE THE PAM FILE LIST (FROM _get_pam_files()) TO GET A LIST OF FILEPATHS AND GET THEIR CONTENTS
             THEN SEND EACH FILE TO THE scan_pam_file_issues FUNCTION TO ADD EACH ISSUE
             TO THE ARRAY OF LISTS CALLED issues"""
-
-        pam_files = self._get_pam_files()
+        try:
+            pam_files = self._get_pam_files()
+        except Exception:
+            logger.warning('Could not access pam files')
+            return
 
         for filepath in pam_files:
             is_pam_conf = (filepath == self.pam_conf_file) # should be same as the input file above
             if self.is_remote:
-                file = self.remote_connection.get_remote_file(filepath)
-                if file is None:
-                    print(f"Error reading remote file {filepath}")
+                try:
+                    file = self.remote_connection.get_remote_file(filepath)
+                except Exception:
+                    logger.warning(f'Could not access remote pam file: {filepath}')
+                    continue
+
                 self.scan_pam_file_issues(file, is_pam_conf, filepath)
            
             else:
@@ -285,7 +340,10 @@ class PAMConfScan:
                 except IOError as e:
                     print(f"Error reading {filepath}: {e}")
         if self.is_remote:
-            self.remote_connection.close_ssh_con()
+            try:
+                self.remote_connection.close_ssh_con()
+            except Exception:
+                logger.warning('Could not close ssh connection to remote device')
 
 
 # FIX THESE TO NOT CHECK COMMENT LINES and FIX SFTP CHECKS
@@ -301,11 +359,21 @@ class FileConfScan:
         self.apache_config_file = apache_config_file
 
         if self.is_remote:
-            self.remote_connection = RemoteDeviceHandling("192.168.1.4", "kali", remote_dir_path = None, remote_file_path = [self.ssh_config_file], password='kali')
+            try:
+                self.remote_connection = RemoteDeviceHandling("192.168.1.4", "kali", remote_dir_path = None, remote_file_path = [self.ssh_config_file], password='kali')
+            except (ValueError, ConnectionError, TimeoutError, RuntimeError) as e:
+                logger.error(str(e))
+                print(e)
+                return
 
-        self.check_ssh_config()
-        self.check_apache_config()
-        self.check_sftp_config()
+        try:
+            self.check_ssh_config()
+            self.check_apache_config()
+            self.check_sftp_config()
+        except Exception as e:
+            logger.error('Configuration scans failed: ', str(e))
+            print('Failed to perform configuration scans')
+            return
 
         # THEN OUTPUT ALL THE ISSUES
         if not self.ssh_issues and not self.apache_issues and not self.sftp_issues:
@@ -327,12 +395,16 @@ class FileConfScan:
                 print(f"  - {issue}")
         
         if not self.is_remote:
-            self.optional_fixing()
+            try:
+                self.optional_fixing()
+            except Exception as e:
+                logger.error('Fixing misconfigurations failed: ', str(e))
+                print('Failed to fix misconfigurations')
+                return
 
         print("\n🔹 Scan Complete.")
 
     def check_ssh_config(self):
-        
         if self.is_remote:
             lines = self.remote_connection.get_remote_file(self.ssh_config_file)
         else:
@@ -434,8 +506,13 @@ class PermissionScan:
         self.ww_files = [] # world writeable files
         self.incorrect_files = [] # files with incorrect permissions
 
-        self.find_world_writable_files()
-        self.find_sensitive_files_with_issues()
+        try:
+            self.find_world_writable_files()
+            self.find_sensitive_files_with_issues()
+        except Exception as e:
+            logger.error(str(e))
+            print('Error while performing permission scans')
+            return
 
         if self.ww_files:
             print("\nWorld-writable files found:")

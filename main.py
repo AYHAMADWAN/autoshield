@@ -2,18 +2,22 @@ import os
 import sys
 import argparse
 from fileScans import PAMConfScan, FileConfScan, PermissionScan
-from networkScans import PortScan
-# import ports
+from networkScans import PortScan, FirewallScan
 from rich import print
 import time
 import signal
 from concurrent.futures import ThreadPoolExecutor
 import threading
+from other import setup_logger
+
+# set up the logging handler:
+logger = setup_logger()
 
 # Exit before errors occur
 # privileges
 # note: handle keyboard interrupts error ✅
 if os.getuid() != 0:
+    logger.warning('The program needs administrative privileges to run')
     print("Need elevated privileges")
     sys.exit(1)
 
@@ -25,6 +29,7 @@ parser.add_argument('-m', '--permission', help='desc', action='store_true')
 parser.add_argument('-o', '--port', help='desc', action='store_true')
 parser.add_argument('-a', '--all', help='desc', action='store_true')
 parser.add_argument('-r', '--remote', help='desc', action='store_true')
+parser.add_argument('-f', '--firewall', help='desc', action='store_true')
 args = parser.parse_args()
 
 #print(vars(args))
@@ -55,7 +60,11 @@ def port_scan():
 
 def remote_scan():
     PAMConfScan(True)
-    FileConfScan(True)
+    #FileConfScan(True)
+
+def firewall_scan():
+    FirewallScan()
+
 
 with ThreadPoolExecutor(max_workers=10) as executor:
     if args.permission:
@@ -82,6 +91,9 @@ with ThreadPoolExecutor(max_workers=10) as executor:
         # print('=' * 80)
         print('🔍 Scanning remote host password and config files for security issues...\n')
         remote_scan()
+    
+    if args.firewall:
+        firewall_scan()
 
 if args.all:
     print('🔍 Scanning password files for security issues...\n')
