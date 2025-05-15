@@ -40,6 +40,9 @@ class RemoteDeviceHandling:
             raise TimeoutError(f'Could not connect to host {self.host}, connection timed out')
         except Exception as e:
             raise RuntimeError(f'Unexpected error while connecting to {self.host}')
+    
+    def get_con(self):
+        return self.ssh
 
     def sftp_isdir(self, path):
         # check if the path is a valid directory
@@ -114,14 +117,3 @@ def setup_logger(name='Autoshield Logger'):
         logger.addHandler(syslog)
 
     return logger
-
-# input by the user
-# host = "192.168.1.2"
-# user = "kali"
-# remote_path = "/etc/passwd"
-
-# files, sftp, ssh = get_remote_file_list(host, user, '/etc/pam.d', remote_path, password='kali')
-# for file in files:
-#     print(get_remote_file(sftp, file))
-
-# close_ssh_con(ssh, sftp)

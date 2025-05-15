@@ -9,6 +9,7 @@ import signal
 from concurrent.futures import ThreadPoolExecutor
 import threading
 from other import setup_logger
+import dynamic
 
 # set up the logging handler:
 logger = setup_logger()
@@ -30,6 +31,7 @@ parser.add_argument('-o', '--port', help='desc', action='store_true')
 parser.add_argument('-a', '--all', help='desc', action='store_true')
 parser.add_argument('-r', '--remote', help='desc', action='store_true')
 parser.add_argument('-f', '--firewall', help='desc', action='store_true')
+parser.add_argument('-d', '--dynamic', help='desc', action='store_true')
 args = parser.parse_args()
 
 #print(vars(args))
@@ -65,6 +67,9 @@ def remote_scan():
 def firewall_scan():
     FirewallScan()
 
+def dynamic_scan():
+    dynamic.start_dynamic_scan(shutdown_event)
+
 
 with ThreadPoolExecutor(max_workers=10) as executor:
     if args.permission:
@@ -94,6 +99,8 @@ with ThreadPoolExecutor(max_workers=10) as executor:
     
     if args.firewall:
         firewall_scan()
+    if args.dynamic:
+        dynamic_scan()
 
 if args.all:
     print('🔍 Scanning password files for security issues...\n')
