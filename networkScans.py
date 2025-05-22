@@ -14,43 +14,37 @@ trusted = {22: 'sshd'}
 logger = setup_logger()
 
 class PortScan:
-    def __init__(self, shutdown_event, target='127.0.0.1', start_port=1, end_port=65535, timeout=5):
+    def __init__(self, shutdown_event, target='127.0.0.1', start_port=1, end_port=65535, user = None, password = None, key_path = None, timeout=5):
         self.target = target
+        self.user = user
+        self.password = password
+        self.key_path = key_path
         self.timeout = timeout
         self.shutdown_event = shutdown_event
         self.port_range = range(start_port, end_port + 1)
         self.open_ports = []
-        self.suspicious_services = {}
-
+        self.suspicious_services = []
+        
+    def run_scan(self):
         if not self.is_valid_ip():
             logger.error('The provided IP Address for remote port scanning is invalid')
-            print("Invalid IP address.")
-            return
+            return {'Port Scan Output:': [{'error': 'Invalid IP Address'}, {'main': 'error'}]}
 
-        logger.info(f'Starting Port Scan on host {target} [port {start_port}-{end_port}]')
-        print("Scanning for open ports...")
+        logger.info(f'Starting Port Scan on host {self.target}')
 
-        self.scan_ports()
+        try:
+            # raise RuntimeError("ERROR: TEST")
+            self.scan_ports()
 
-        # if self.open_ports:
-        #     print(f"Open ports: {self.open_ports}")
-            
-        #     print("Identifying services...")
-        #     # handle shutdowns
-        #     if self.shutdown_event.is_set():
-        #         print(f"Could not perform service scan due to abrupt shutdown")
-        #         return
-        #     self.identify_services()
-        #     for port, service in self.services.items():
-        #         print(f"Port {port}: {service}")
-        # else:
-        #     print("No open ports found.")
-        self.identify_services()
+            self.identify_services()
 
-        if self.suspicious_services:
-            print(f"suspicious services: {self.suspicious_services}")
-        else:
-            print('no suspicious services found')
+            if self.suspicious_services:
+                self.suspicious_services.append({'main': 'port'})
+                return {'Port Scan Output:': self.suspicious_services}
+            else:
+                return {'Port Scan Output:': [{'main': 'No issues found.'}]}
+        except Exception as e:
+            return {'Port Scan Output:': [{'error': e}, {'main': 'error'}]}
 
     def scan_ports(self):
         threads = []
@@ -61,22 +55,37 @@ class PortScan:
                     print(f"Stopped at port: {port}")
                     break
                 futures.append(executor.submit(self.scan_port, port))
+            
+            for future in futures:
+                try:
+                    future.result()
+                except Exception as e:
+                    self.shutdown_event.set()
+                    raise RuntimeError(f"Port scan aborted: {e}")
+                    break
         
     def scan_port(self, port):
         if self.shutdown_event.is_set():
             return
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.settimeout(self.timeout)  # Configurable timeout for balancing speed and accuracy
-            result = s.connect_ex((self.target, port))
-            if result == 0:
-                self.open_ports.append(port)
+            s.settimeout(2)
+            s.connect((self.target, port))
+            self.open_ports.append(port)
+            # print(f"Port open {port}")
         except socket.timeout:
-            logger.debug(f'Timeout while scanning port {port}')
+            raise RuntimeError("Socket Timeout")
+            pass
         except socket.error as e:
-            logger.debug(f'Socket error on port {port}: {e}')
+            if e.errno == 113:
+                raise RuntimeError("Destination Unreachable")
+            elif e.errno == 101:
+                raise RuntimeError("Network Unreachable")
+            else:
+                # raise RuntimeError(f"Error Scanning Ports{e}")
+                pass
         except Exception as e:
-            logger.error(f'Unexpected socket error while scanning port {port}')
+            raise RuntimeError(e)
         finally:
             s.close()
 
@@ -90,8 +99,8 @@ class PortScan:
         for port in self.open_ports:
             # handle shutdowns
             if self.shutdown_event.is_set():
-                    print(f"Stopped at service port: {port}")
-                    break
+                print(f"Stopped at service port: {port}")
+                break
             try:
                 service = socket.getservbyport(port)
             except OSError:
@@ -105,38 +114,41 @@ class PortScan:
                 result = subprocess.run(['sudo', 'lsof', '-i', f':{port}'], capture_output=True, text=True)
                 output = result.stdout
             else:
-                remote_device = RemoteDeviceHandling("192.168.1.6", "kali", remote_dir_path = [], remote_file_path = [], password='kali')
+                remote_device = RemoteDeviceHandling(self.target, self.user, remote_dir_path = [], remote_file_path = [], password = self.password, key_path = self.key_path)
                 ssh_con = remote_device.get_con()
                 stdin, stdout, stderr = ssh_con.exec_command(f"sudo -S lsof -i:{port}")
-                stdin.write("kali\n")  # send sudo password
+                stdin.write(f"{self.password}\n")  # send sudo password
                 stdin.flush()
                 output = stdout.read().decode()
                 
             lines = output.strip().split('\n')
 
             if len(lines) <= 1:
-                self.suspicious_services[port] = {
+                self.suspicious_services.append({
+                    'port': 'port:' + str(port),
                     'expected_service': expected_service,
                     'actual_service': 'Unknown',
-                    'reason': 'Cannot identify the actual service running on that port'}
+                    'reason': 'Cannot identify the actual service running on that port'})
                 return
             actual_service = lines[1].split()[0]
             
             if expected_service == "Unknown":
-                self.suspicious_services[port] = {
+                self.suspicious_services.append({
+                    'port': 'port:' + str(port),
                     'expected_service': expected_service,
                     'actual_service': actual_service,
-                    'reason': f'Undefined expected service on this port, actual service is {actual_service}'}
+                    'reason': f'Undefined expected service on this port, actual service is {actual_service}'})
                 return
             if port in trusted and actual_service == trusted[port]:
                 return
             if expected_service in result.stdout:
                 return
 
-            self.suspicious_services[port] = {
+            self.suspicious_services.append({
+                'port': 'port:' + str(port),
                 'expected_service': expected_service,
                 'actual_service': actual_service,
-                'reason': 'The service running on this port is not the expected service and is not a trusted process'}
+                'reason': 'The service running on this port is not the expected service and is not a trusted process'})
         except Exception as e:
             print('error', e)
         

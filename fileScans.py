@@ -5,23 +5,8 @@ from other import RemoteDeviceHandling
 from other import setup_logger
 from rich import print
 import stat
+import pwd
 
-# inputs:
-# * if not remote: *
-# pam directory path | default = /etc/pam.d
-# pam config file path | default = /etc/pam.conf
-#
-# * if remote, the above plus: *
-# ip address
-# username
-# password (if no keypath)
-# key path (if no password)
-#
-# output:
-# report function
-
-
-# set up the logging handler:
 logger = setup_logger()
 
 
@@ -104,6 +89,91 @@ SSH_RULES = [
     }
 ]
 
+APACHE_RULES = [
+    {
+        "rule": "ServerTokens Full",
+        "message": "Exposes detailed server information in HTTP headers.",
+        "key": "ServerTokens",
+        "details": "Use 'ServerTokens Prod' to prevent attackers from fingerprinting the server software version and OS."
+    },
+    {
+        "rule": "ServerSignature On",
+        "message": "Reveals server version on error pages.",
+        "key": "ServerSignature",
+        "details": "Use 'ServerSignature Off' to avoid exposing version info in Apache-generated error pages."
+    },
+    {
+        "rule": "AllowOverride All",
+        "message": "Allows .htaccess to override critical settings.",
+        "key": "AllowOverride",
+        "details": "Set 'AllowOverride None' or restrict it to necessary directives (e.g., 'AuthConfig') to prevent abuse."
+    },
+    {
+        "rule": "Options Indexes",
+        "message": "Enables directory listing if no index file is found.",
+        "key": "Options",
+        "details": "Remove 'Indexes' from the 'Options' directive or use 'Options -Indexes' to disable browsing."
+    },
+    {
+        "rule": "Options FollowSymLinks",
+        "message": "Follows symbolic links, which may lead to security issues.",
+        "key": "Options",
+        "details": "Replace with 'Options -FollowSymLinks' or use 'SymLinksIfOwnerMatch' for safer symlink handling."
+    },
+    {
+        "rule": "AccessFileName .htaccess",
+        "message": "Allows usage of .htaccess files that can override configs.",
+        "key": "AccessFileName",
+        "details": "Disable override with 'AllowOverride None' and restrict access to .htaccess files using '<FilesMatch>'."
+    },
+    {
+        "rule": "LimitRequestBody 0",
+        "message": "No limit on request body size.",
+        "key": "limit_request_body_missing",
+        "details": "Set a reasonable 'LimitRequestBody' value to limit request sizes."
+    },
+    {
+        "rule": "# SSLProtocol all -SSLv3 -TLSv1 -TLSv1.1",
+        "message": "Weak SSL/TLS protocols enabled or not properly restricted.",
+        "key": "ssl_protocol_weak",
+        "details": "Disable insecure protocols and only allow TLS 1.2+."
+    }
+]
+
+SFTP_RULES = SFTP_RULES = [
+    {
+        "rule": "Subsystem sftp /usr/lib/openssh/sftp-server",
+        "message": "Using legacy sftp-server binary instead of internal-sftp.",
+        "key": "Subsystem",
+        "details": "Replace with 'Subsystem sftp internal-sftp' to enhance security and avoid exposing unnecessary binaries."
+    },
+    {
+        "rule": "ChrootDirectory /",
+        "message": "ChrootDirectory set to root, which can be insecure and misconfigured.",
+        "key": "ChrootDirectory",
+        "details": "Use 'ChrootDirectory %h' or a dedicated directory owned by root for better isolation."
+    },
+    {
+        "rule": "AllowTcpForwarding yes",
+        "message": "TCP forwarding enabled for SFTP, which may allow tunneling or bypassing restrictions.",
+        "key": "AllowTcpForwarding",
+        "details": "Set 'AllowTcpForwarding no' in SFTP-only match blocks to prevent misuse."
+    },
+    {
+        "rule": "X11Forwarding yes",
+        "message": "X11 forwarding enabled, which is not needed for SFTP and increases attack surface.",
+        "key": "X11Forwarding",
+        "details": "Disable X11 forwarding with 'X11Forwarding no' when only SFTP access is required."
+    },
+    {
+        "rule": "PermitTunnel yes",
+        "message": "Tunneling enabled, which can be dangerous for SFTP-only users.",
+        "key": "PermitTunnel",
+        "details": "Set 'PermitTunnel no' unless explicitly needed."
+    }
+]
+
+
 # *********************************** OUTPUT ***********************************
 def report(types, value1, value2, value3, value4):
     """ PRINTED OUTPUT """
@@ -122,32 +192,34 @@ def report(types, value1, value2, value3, value4):
 # *******************************************************************************
 
 class PAMConfScan:
-    def __init__(self, is_remote=False, pam_dir='/etc/pam.d', pam_conf_file='/etc/pam.conf'):
+    def __init__(self, is_remote=False, pam_dir='/etc/pam.d', pam_conf_file='/etc/pam.conf', target = None, user = None, password = None, key_path = None):
         self.is_remote = is_remote
         
         self.issues = []
         self.pam_dir = pam_dir
         self.pam_conf_file = pam_conf_file
 
+        
+    def run_scan(self):# Run the scan and check for any errors
         # Establish a remote connection with the target
         if self.is_remote:
             try:
-                self.remote_connection = RemoteDeviceHandling("192.168.1.6", "kali", remote_dir_path = [self.pam_dir], remote_file_path = [self.pam_conf_file, '/etc/passwd'], password='kali')
+                self.remote_connection = RemoteDeviceHandling(target, user, remote_dir_path = [self.pam_dir], remote_file_path = [self.pam_conf_file], password=password, key_path = key_path)
             except (ValueError, ConnectionError, TimeoutError, RuntimeError) as e:
                 logger.error(str(e))
-                print(e)
-                return
-        
-        # Run the scan and check for any errors
+                return {'Remote Scan Output:': [{'error': e}, {'main': 'error'}]}
         try:
             self.check_pam_config()
+            # self.issues = []
+            # raise RuntimeError('ERROR: TEST')
             if self.issues:
-                for issue in self.issues:
-                    report('password', issue['message'], issue['file'], issue['line'], issue['details'])
+                self.issues.append({'main': 'file'})
+                return {'Password Scan Output:': self.issues}
+                # return {'Password Scan Output:': [issue['message'], issue['file'], issue['line'], issue['details']]}
             else:
-                print('No issues found.')
+                return {'Password Scan Output:': [{'main': 'No issues found.'}]}
         except (FileNotFoundError, IOError, RuntimeError) as e:
-            print(e)
+            return {'Password Scan Output:': [{'error': e}, {'main': 'error'}]}
 
     def parse_pam_line(self, line, is_pam_conf):
         """ PARSE A LINE FROM PAM CONFIG FILE AND RETURN IT AS A LIST"""
@@ -348,8 +420,7 @@ class PAMConfScan:
 
 # FIX THESE TO NOT CHECK COMMENT LINES and FIX SFTP CHECKS
 class FileConfScan:
-    def __init__(self, is_remote=False, ssh_config_file='/etc/ssh/sshd_config', apache_config_file='/etc/apache2/apache2.conf'):
-        print("🔍 Scanning system configurations for security issues...\n") # CHANGE THIS <---------------------
+    def __init__(self, is_remote=False, ssh_config_file='/etc/ssh/sshd_config', apache_config_file='/etc/apache2/apache2.conf', target = None, user = None, password = None, key_path = None):
         self.is_remote = is_remote
         self.ssh_issues = []
         self.apache_issues = []
@@ -358,51 +429,37 @@ class FileConfScan:
         self.ssh_config_file = ssh_config_file
         self.apache_config_file = apache_config_file
 
+
+    def run_scan(self):
         if self.is_remote:
             try:
-                self.remote_connection = RemoteDeviceHandling("192.168.1.4", "kali", remote_dir_path = None, remote_file_path = [self.ssh_config_file], password='kali')
+                self.remote_connection = RemoteDeviceHandling(target, user, remote_dir_path = None, remote_file_path = [self.ssh_config_file], password=password, key_path = key_path)
             except (ValueError, ConnectionError, TimeoutError, RuntimeError) as e:
                 logger.error(str(e))
-                print(e)
-                return
-
+                return {'Remote Scan Output:': [{'error': e}, {'main': 'error'}]}
         try:
             self.check_ssh_config()
             self.check_apache_config()
             self.check_sftp_config()
+            # THEN OUTPUT ALL THE ISSUES
+            # raise Exception("ERROR: TEST")
+            if not self.ssh_issues and not self.apache_issues and not self.sftp_issues:
+                return {'File Scan Output:': [{'main': 'No issues found.'}]}
+
+            issues = self.ssh_issues + self.apache_issues + self.sftp_issues
+            issues.append({'main': 'key'})
+            return {'File Scan Output:': issues}
+
+            if not self.is_remote:
+                try:
+                    self.optional_fixing()
+                except Exception as e:
+                    logger.error('Fixing misconfigurations failed: ', str(e))
+                    return
         except Exception as e:
-            logger.error('Configuration scans failed: ', str(e))
-            print('Failed to perform configuration scans')
-            return
+            # logger.error('Configuration scans failed: ', str(e))
+            return {'File Scan Output:': [{'error': e}, {'main': 'error'}]}
 
-        # THEN OUTPUT ALL THE ISSUES
-        if not self.ssh_issues and not self.apache_issues and not self.sftp_issues:
-            print("✅ No insecure configurations found. System is secure!")
-            return
-
-        if self.ssh_issues:
-            for issue in self.ssh_issues:
-                report('misconfig', issue['message'], self.ssh_config_file, issue['key'], issue['details'])
-        
-        if self.apache_issues:
-            print("\n🚨 Apache Misconfigurations Found:")
-            for issue in self.apache_issues:
-                print(f"  - {issue}")
-
-        if self.sftp_issues:
-            print("\n🚨 SFTP Misconfigurations Found:")
-            for issue in self.sftp_issues:
-                print(f"  - {issue}")
-        
-        if not self.is_remote:
-            try:
-                self.optional_fixing()
-            except Exception as e:
-                logger.error('Fixing misconfigurations failed: ', str(e))
-                print('Failed to fix misconfigurations')
-                return
-
-        print("\n🔹 Scan Complete.")
 
     def check_ssh_config(self):
         if self.is_remote:
@@ -418,7 +475,7 @@ class FileConfScan:
                         self.ssh_issues.append({
                             'message': rule['message'],
                             'file': self.ssh_config_file,
-                            'key': rule['key'],
+                            'key': 'SSH - '+ rule['key'],
                             'details': rule['details']
                         })
                 elif len(rule['rule'].split()) == 3 and len(line.split()) > 1 and line.split()[-1].isdigit():
@@ -428,7 +485,7 @@ class FileConfScan:
                             self.ssh_issues.append({
                             'message': rule['message'],
                             'file': self.ssh_config_file,
-                            'key': rule['key'],
+                            'key': 'SSH - '+ rule['key'],
                             'details': rule['details']
                         })
 
@@ -440,12 +497,16 @@ class FileConfScan:
                 lines = file.readlines()
 
         for line in lines:
-            if "Options Indexes" in line:
-                self.apache_issues.append("Remove 'Indexes' from 'Options' to prevent directory listing.")
-            if "ServerTokens Full" in line:
-                self.issues.append("ServerTokens should be 'Prod' to hide Apache version details.")
-            if "ServerSignature On" in line:
-                self.issues.append("ServerSignature should be 'Off' to remove Apache error page info.")
+            for rule in APACHE_RULES:
+                if '\n' in rule['rule']:
+                    continue
+                if rule['rule'] in line:
+                    self.apache_issues.append({
+                        'message': rule['message'],
+                        'file': self.apache_config_file,
+                        'key': 'APACHE - ' + rule['key'],
+                        'details': rule['details']
+                    })
 
     def check_sftp_config(self):
         if self.is_remote:
@@ -455,8 +516,14 @@ class FileConfScan:
                 lines = file.readlines()
 
         for line in lines:
-            if "Subsystem sftp" in line and "internal-sftp" not in line:
-                self.sftp_issues.append("SFTP should use 'internal-sftp' for security.")
+            for rule in SFTP_RULES:
+                if rule['rule'] in line:
+                    self.apache_issues.append({
+                        'message': rule['message'],
+                        'file': self.ssh_config_file,
+                        'key': 'SFTP - ' + rule['key'],
+                        'details': rule['details']
+                    })
 
     def optional_fixing(self):
         # Ask the user if they want to fix issues
@@ -485,12 +552,19 @@ class FileConfScan:
 
     def fix_apache_config(self):
         print("\nApplying secure Apache configurations...")
-        os.system("sudo cp /etc/apache2/apache2.conf /etc/apache2/apache2.conf.bak")  # Backup
+        os.system("sudo cp /etc/apache2/apache2.conf /etc/apache2/apache2.conf.bak")
         os.system("sudo sed -i 's/Options Indexes/Options -Indexes/' /etc/apache2/apache2.conf")
+        os.system("sudo sed -i 's/Options FollowSymLinks/Options -FollowSymLinks/' /etc/apache2/apache2.conf")
+        os.system("sudo sed -i 's/AllowOverride All/AllowOverride None/' /etc/apache2/apache2.conf")
         os.system("sudo sed -i 's/ServerTokens Full/ServerTokens Prod/' /etc/apache2/apache2.conf")
         os.system("sudo sed -i 's/ServerSignature On/ServerSignature Off/' /etc/apache2/apache2.conf")
+        os.system("sudo sed -i '/^AccessFileName \\+.htaccess/d' /etc/apache2/apache2.conf")
+        os.system("sudo sed -i '/^#AccessFileName \\+.htaccess/d' /etc/apache2/apache2.conf")
+        os.system("sudo grep -q '^LimitRequestBody' /etc/apache2/apache2.conf || echo 'LimitRequestBody 1048576' | sudo tee -a /etc/apache2/apache2.conf > /dev/null")
+        os.system("sudo sed -i 's/^# SSLProtocol.*/SSLProtocol -all +TLSv1.2 +TLSv1.3/' /etc/apache2/apache2.conf")
+        os.system("sudo sed -i 's/^SSLProtocol.*/SSLProtocol -all +TLSv1.2 +TLSv1.3/' /etc/apache2/apache2.conf")
+        # Restart Apache to apply changes
         os.system("sudo systemctl restart apache2")
-        print("✅ Apache configurations updated successfully!")
 
     def fix_sftp_config(self):
         print("\nApplying secure SFTP configurations...")
@@ -506,30 +580,20 @@ class PermissionScan:
         self.ww_files = [] # world writeable files
         self.incorrect_files = [] # files with incorrect permissions
 
+    def run_scan(self):
         try:
+            # raise RuntimeError('ERROR: TEST')
             self.find_world_writable_files()
             self.find_sensitive_files_with_issues()
         except Exception as e:
-            logger.error(str(e))
-            print('Error while performing permission scans')
-            return
+            return {'Permission Scan Output:': [{'error': e}, {'main': 'error'}]}
 
-        if self.ww_files:
-            print("\nWorld-writable files found:")
-            for f in self.ww_files:
-                print(f)
-        else:
-            print("No world-writable files found.")
+        if not self.ww_files and not self.incorrecet_files:
+            return {'Permission Scan Output:': [{'main': 'No issues found.'}]}
 
-            print("\nScanning for sensitive files with incorrect permissions...")
-
-        if self.incorrect_files:
-            print("\nSensitive files with incorrect permissions:")
-            for f, correct_mode in self.incorrect_files:
-                current_mode = os.stat(f).st_mode & 0o777
-                print(f"{f}: Current -> {oct(current_mode)}, Expected -> {oct(correct_mode)}")
-        else:
-            print("All sensitive files have correct permissions.")
+        issues = self.ww_files + self.incorrect_files
+        issues.append({'main': 'file'})
+        return {'Permission Scan Output:': issues}
 
 
     def is_world_writable(self, file_path):
@@ -561,7 +625,26 @@ class PermissionScan:
 
                 file_path = os.path.join(root, file)
                 if self.is_world_writable(file_path):
-                    self.ww_files.append(file_path)
+                    self.ww_files.append({
+                        'file': file_path,
+                        'issue': 'World Writable File',
+                        'owner': self.get_file_owner(file_path),
+                        'permissions': self.get_file_permissions(file_path)
+                    })
+
+    def get_file_owner(self, file_path):
+        try:
+            file_stat = os.stat(file_path)
+            return pwd.getpwuid(file_stat.st_uid).pw_name
+        except Exception as e:
+            raise RuntimeError(e)
+    
+    def get_file_permissions(self, file_path):
+        try:
+            file_stat = os.stat(file_path)
+            return stat.filemode(file_stat.st_mode)
+        except Exception as e:
+            raise RuntimeError(e)
 
     def find_sensitive_files_with_issues(self):
         sensitive_files = {
@@ -569,10 +652,16 @@ class PermissionScan:
             "/etc/shadow": 0o640,
             "/etc/group": 0o644,
             "/etc/gshadow": 0o640,
+            "/home/linux/worldwriteable": 0o111, # <-------- just for tests
             os.path.expanduser("~/.ssh/id_rsa"): 0o600,
             os.path.expanduser("~/.ssh/id_rsa.pub"): 0o644,
         }
 
         for file, correct_mode in sensitive_files.items():
             if os.path.exists(file) and self.has_incorrect_permissions(file, correct_mode):
-                self.incorrect_files.append((file, correct_mode))
+                self.incorrect_files.append({
+                    'file': file,
+                    'issue': 'File has incorrect permissions',
+                    'expected permissions': stat.filemode(correct_mode | stat.S_IFREG),
+                    'actual permissions': self.get_file_permissions(file)
+                })
