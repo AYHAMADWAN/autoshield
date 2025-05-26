@@ -6,6 +6,7 @@ from other import setup_logger
 from rich import print
 import stat
 import pwd
+import shutil
 
 logger = setup_logger()
 
@@ -194,6 +195,10 @@ def report(types, value1, value2, value3, value4):
 class PAMConfScan:
     def __init__(self, is_remote=False, pam_dir='/etc/pam.d', pam_conf_file='/etc/pam.conf', target = None, user = None, password = None, key_path = None):
         self.is_remote = is_remote
+        self.target = target
+        self.user = user
+        self.password = password
+        self.key_path = key_path
         
         self.issues = []
         self.pam_dir = pam_dir
@@ -204,18 +209,22 @@ class PAMConfScan:
         # Establish a remote connection with the target
         if self.is_remote:
             try:
-                self.remote_connection = RemoteDeviceHandling(target, user, remote_dir_path = [self.pam_dir], remote_file_path = [self.pam_conf_file], password=password, key_path = key_path)
+                self.remote_connection = RemoteDeviceHandling(self.target, self.user, remote_dir_path = [self.pam_dir], remote_file_path = [self.pam_conf_file], password=self.password, key_path = self.key_path)
             except (ValueError, ConnectionError, TimeoutError, RuntimeError) as e:
                 logger.error(str(e))
-                return {'Remote Scan Output:': [{'error': e}, {'main': 'error'}]}
+                return {'Remote PAM Scan Output:': [{'error': e}, {'main': 'error'}]}
         try:
             self.check_pam_config()
             # self.issues = []
             # raise RuntimeError('ERROR: TEST')
             if self.issues:
                 self.issues.append({'main': 'file'})
-                return {'Password Scan Output:': self.issues}
-                # return {'Password Scan Output:': [issue['message'], issue['file'], issue['line'], issue['details']]}
+                if not self.is_remote:
+                    return {'Password Scan Output:': self.issues}
+                else:
+                    return {'Remote PAM Scan Output:': self.issues}
+
+                
             else:
                 return {'Password Scan Output:': [{'main': 'No issues found.'}]}
         except (FileNotFoundError, IOError, RuntimeError) as e:
@@ -422,6 +431,10 @@ class PAMConfScan:
 class FileConfScan:
     def __init__(self, is_remote=False, ssh_config_file='/etc/ssh/sshd_config', apache_config_file='/etc/apache2/apache2.conf', target = None, user = None, password = None, key_path = None):
         self.is_remote = is_remote
+        self.target = target
+        self.user = user
+        self.password = password
+        self.key_path = key_path
         self.ssh_issues = []
         self.apache_issues = []
         self.sftp_issues = []
@@ -433,10 +446,10 @@ class FileConfScan:
     def run_scan(self):
         if self.is_remote:
             try:
-                self.remote_connection = RemoteDeviceHandling(target, user, remote_dir_path = None, remote_file_path = [self.ssh_config_file], password=password, key_path = key_path)
+                self.remote_connection = RemoteDeviceHandling(self.target, self.user, remote_dir_path = None, remote_file_path = [self.ssh_config_file], password=self.password, key_path = self.key_path)
             except (ValueError, ConnectionError, TimeoutError, RuntimeError) as e:
                 logger.error(str(e))
-                return {'Remote Scan Output:': [{'error': e}, {'main': 'error'}]}
+                return {'Remote File Scan Output:': [{'error': e}, {'main': 'error'}]}
         try:
             self.check_ssh_config()
             self.check_apache_config()
@@ -448,7 +461,10 @@ class FileConfScan:
 
             issues = self.ssh_issues + self.apache_issues + self.sftp_issues
             issues.append({'main': 'key'})
-            return {'File Scan Output:': issues}
+            if not self.is_remote:
+                return {'File Scan Output:': issues}
+            else:
+                return {'Remote File Scan Output:': issues}
 
             if not self.is_remote:
                 try:
@@ -665,3 +681,103 @@ class PermissionScan:
                     'expected permissions': stat.filemode(correct_mode | stat.S_IFREG),
                     'actual permissions': self.get_file_permissions(file)
                 })
+
+
+class SoftwareScan:
+    def __init__(self, package_manager = None):
+        self.outdated = []
+        self.package_manager = package_manager
+
+    def run_scan(self):
+        try:
+            if self.package_manager not in ['apt', 'dnf']:
+                return {'Software Scan Output:': [{'error': 'Could not identify package manager'}, {'main': 'error'}]}
+            self.check_outdated_software()
+            # raise RuntimeError('ERROR: TEST')
+            if self.outdated:
+                self.outdated.append({'main': 'software'})
+                return {'Software Scan Output:': self.outdated}
+            else:
+                return {'Software Scan Output:': [{'main': 'No issues found.'}]}
+        except Exception as e:
+            return {'Software Scan Output:': [{'error': e}, {'main': 'error'}]}
+
+    def get_distro_id(self):
+        try:
+            distro_info = platform.freedesktop_os_release()
+            return distro_info.get("ID", "").lower()
+        except Exception as e:
+            raise RuntimeError("Could not identify the distribution")
+
+    def run_command(self, command):
+        try:
+            result = subprocess.run(command, shell=True, capture_output=True, text=True)
+            if result.stdout:
+                # return self.parse(result.stdout, "SUCCESS") # make it return
+                return result.stdout
+            if result.stderr:
+                raise RuntimeError("Error while running command" + result.stderr)
+        except Exception as e:
+            raise RuntimeError(f"Error while running command {e}")
+
+    def check_outdated_software(self):
+        try:
+            distro = self.get_distro_id()
+        except Exception as e:
+            distro = ""
+
+        if shutil.which("sudo") is None:
+            return # ERROR
+
+        if "ubuntu" in distro or "debian" in distro or self.package_manager == "apt":
+            if shutil.which("apt"):
+                output = self.run_command("sudo apt list --upgradeable")
+                output = output.split("\n")
+                for line in output[1:-1]:
+                    line = line.split(" ", 3)
+                    self.outdated.append({
+                        'software': line[0].split("/")[0],
+                        'architecture': line[2],
+                        'current version': line[3].strip('[]').split()[2],
+                        'newest version': line[1]
+                    })
+            else:
+                raise RuntimeError("Error while running APT")
+
+        elif "fedora" in distro or "rhel" in distro or "centos" in distro or self.package_manager == "dnf" or self.package_manager == "yum":
+            if shutil.which("dnf"):
+                update_output = self.run_command("sudo dnf check-update")
+                update_output = update_output.split("\n")
+                verions_output = self.run_command("sudo dnf list --all bash")
+                versions_output = versions_output.split("\n")
+
+                versions = {}
+                for line in versions_output[1:-1]:
+                    line = line.split()
+                    if len(line) < 3:
+                        break
+                    versions[line[0]] = line[1]
+
+                for line in update_output[1:-1]:
+                    line = line.split()
+                    self.outdated.append({
+                        'software': line[0].rsplit('.', 1)[0],
+                        'architecture': line[0].rsplit('.', 1)[1],
+                        'current version': versions.get(line[0], "unknown"),
+                        'newest version': line[1]
+                    })
+
+            elif shutil.which("yum"):
+                self.run_command("sudo yum check-update")
+            else:
+                raise RuntimeError("Could not find the package manager")
+
+        elif "arch" in distro or "manjaro" in distro or self.package_manager == "checkupdates":
+            if shutil.which("checkupdates"):
+                log_output("Using Pacman/checkupdates to check for upgrades...")
+                run_command("checkupdates")
+            else:
+                raise RuntimeError("Could not find the package manager")
+
+        else:
+            raise RuntimeError("Unsupported distribution or package manager")

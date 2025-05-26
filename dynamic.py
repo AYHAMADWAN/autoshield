@@ -209,35 +209,44 @@ def get_cpu_usage(pid):
 
 def start_dynamic_scan(shutdown_event):
     global process_scores
-    while True:
-        for pid in all_pids:
-            info = get_process_info(pid)
-            if not info:
-                continue
-            exe = info['exe']
-            user = info['user']['username']
-            uid = info['user']['uid']
+    suspicious = []
 
-            is_suspicious_directory(pid, exe)
-            is_suspicious_user(user, exe, uid)
-            is_suspicious_behavior(pid, info)
-            has_suspicious_memory_maps(pid, info)
-            cpu = get_cpu_usage(pid)
-            if cpu > 70 and user != "root":
-                add_suspicion(pid, 'Suspiciously high cpu usage by a process', 'high_cpu_usage', exe)
+    for pid in all_pids:
+        info = get_process_info(pid)
+        if not info:
+            continue
+        exe = info['exe']
+        user = info['user']['username']
+        uid = info['user']['uid']
 
-            if '(deleted)' in exe or '[unreadable exe]' in exe:
-                add_suspicion(pid, 'The process is running a deleted or unreadable executable file', "deleted_or_unreadable_exe", exe)
+        is_suspicious_directory(pid, exe)
+        is_suspicious_user(user, exe, uid)
+        is_suspicious_behavior(pid, info)
+        has_suspicious_memory_maps(pid, info)
+        cpu = get_cpu_usage(pid)
+        if cpu > 70 and user != "root":
+            add_suspicion(pid, 'Suspiciously high cpu usage by a process', 'high_cpu_usage', exe)
+
+        if '(deleted)' in exe or '[unreadable exe]' in exe:
+            add_suspicion(pid, 'The process is running a deleted or unreadable executable file', "deleted_or_unreadable_exe", exe)
         
         for pid, data in sorted(process_scores.items(), key=lambda x: x[1]["score"], reverse=True):
-            print(f"⚠️ PID {pid} | {data['exe']} | Score: {data['score']}")
-            for reason in data["reasons"]:
-                print(f"  └─ {reason}")
+            if not data or not pid:
+                continue
+            # print(f"⚠️ PID {pid} | {data['exe']} | Score: {data['score']}")
+            # for reason in data["reasons"]:
+            suspicious.append({
+                'PID': pid,
+                'Executable': data['exe'],
+                'Score': data['score'],
+                'Reasons': " || ".join(data['reasons'])
+            })
+                # print(f"  └─ {reason}")
         
         process_scores = {}
-
-        # insert logic to delete previous output and get new output on gui <---------------------
-        
-        sleep(3)
         if shutdown_event.is_set():
             break
+
+        # insert logic to delete previous output and get new output on gui <---------------------
+    suspicious.append({'main': 'Executable'})
+    return {'Process Scan Output:': suspicious}

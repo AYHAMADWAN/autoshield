@@ -1,6 +1,7 @@
 import sys
 import os
 import threading
+import signal
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QLabel, QVBoxLayout, QPushButton,
     QCheckBox, QTextEdit, QLineEdit, QStackedWidget, QHBoxLayout, QGroupBox,
@@ -9,8 +10,16 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtGui import QPixmap
 from PyQt6.QtCore import Qt
 
-from fileScans import PAMConfScan, FileConfScan, PermissionScan
+from fileScans import PAMConfScan, FileConfScan, PermissionScan, SoftwareScan
 from networkScans import PortScan
+import dynamic
+
+shutdown_event = threading.Event()
+def handle_signal(signum, frame):
+    shutdown_event.set()
+
+signal.signal(signal.SIGINT, handle_signal)
+signal.signal(signal.SIGTERM, handle_signal)
 
 class PageOne(QWidget):
     def __init__(self, stacked_widget):
@@ -19,7 +28,7 @@ class PageOne(QWidget):
         layout = QVBoxLayout()
 
         self.banner = QLabel(self)
-        pixmap = QPixmap("Logo 1.png").scaledToWidth(180)
+        pixmap = QPixmap("Logo 1.jpg").scaledToWidth(180)
         self.banner.setPixmap(pixmap)
         self.banner.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         layout.addWidget(self.banner)
@@ -48,8 +57,8 @@ class PageOne(QWidget):
         
         
         self.dynamic_button = QPushButton("Dynamic Scan")
-        self.dynamic_button.setCheckable(True)
-        self.dynamic_button.clicked.connect(lambda: self.function()) # <------------ do this
+        # self.dynamic_button.setCheckable(True)
+        self.dynamic_button.clicked.connect(lambda: self.dynamic()) # <------------ do this
         self.dynamic_button.setStyleSheet("QPushButton { font-size: 20px; } QPushButton:checked {background-color: white; color: black;}")
         spacer_button = QPushButton()
         spacer_button.setStyleSheet("QPushButton { font-size: 20px; } QPushButton:checked {background-color: white; color: black;}")
@@ -76,15 +85,36 @@ class PageOne(QWidget):
                 selected.append(cb.text())
                 cb.setChecked(False)
         
-        # reset page two
-        old_widget = self.stacked_widget.widget(1)
-        self.stacked_widget.removeWidget(old_widget)
-        old_widget.deleteLater()  
+        # reset page two and three
+        old_widget2 = self.stacked_widget.widget(2)
+        if old_widget2:
+            self.stacked_widget.removeWidget(old_widget2)
+            old_widget2.deleteLater()
+
+        new_page_three = PageThree(self.stacked_widget)
+        self.stacked_widget.insertWidget(2, new_page_three)
+
+
+        old_widget1 = self.stacked_widget.widget(1)
+        if old_widget1:
+            self.stacked_widget.removeWidget(old_widget1)
+            old_widget1.deleteLater()  
 
         new_page_two = PageTwo(self.stacked_widget)
         self.stacked_widget.insertWidget(1, new_page_two)
         self.stacked_widget.widget(1).update_selected_checks(selected)
         self.stacked_widget.setCurrentIndex(1)
+    
+    def dynamic(self):
+        old_widget2 = self.stacked_widget.widget(2)
+        self.stacked_widget.removeWidget(old_widget2)
+        old_widget2.deleteLater()
+
+        new_page_three = PageThree(self.stacked_widget)
+        self.stacked_widget.insertWidget(2, new_page_three)
+        # self.stacked_widget.widget(2).results = dynamic.start_dynamic_scan(shutdown_event)
+        self.stacked_widget.widget(2).run_scans(["Process Scan"], [])
+        self.stacked_widget.setCurrentIndex(2)
 
 
 
@@ -471,16 +501,26 @@ class PageThree(QWidget):
                 pam_file = inputs['Remote Scan Inputs:'][5]
                 apache_file = inputs['Remote Scan Inputs:'][6]
                 ssh_file = inputs['Remote Scan Inputs:'][7]
-                PAMConfScan(True, target = target, user = user, password = password, key_path = key_path, pam_dir = pam_dir, pam_conf_file = pam_file)
-                FileConfScan(True, target = target, user = user, password = password, key_path = key_path, ssh_config_file = ssh_file, apache_config_file = apache_file)
+                remote_pam_obj = PAMConfScan(
+                    True, target = target, user = user, password = password, key_path = key_path, pam_dir = pam_dir, pam_conf_file = pam_file)
+                remote_file_obj = FileConfScan(
+                    True, target = target, user = user, password = password, key_path = key_path, ssh_config_file = ssh_file, apache_config_file = apache_file)
+                self.results.update(remote_pam_obj.run_scan())
+                self.results.update(remote_file_obj.run_scan())
+
             
             if "Firewall Rules Scan" in self.selected:
                 tool = inputs['Firewall Scan Inputs:'][0]
                 pass # <---- call firewall scan
 
             if "Outdated Software Scan" in self.selected:
-                tool = inputs['Outdated Software Scan Inputs:']
-                pass # <---- call outdated software scan scan
+                tool = inputs['Outdated Software Scan Inputs:'][0]
+                software_obj = SoftwareScan(tool)
+                self.results.update(software_obj.run_scan())
+            
+            if "Process Scan" in self.selected:
+                self.results.update(dynamic.start_dynamic_scan(shutdown_event))
+
 
         run()
         self.store_output()
@@ -508,20 +548,6 @@ class PageThree(QWidget):
                     button.clicked.connect(lambda _, t=title, n=output: self.openWindow(title, n))
                     button.setStyleSheet('QPushButton{font-size: 20px}')
                     self.content_layout.addWidget(button)
-
-            # if "Password Scan" in self.selected:
-            # if "Config Scan" in self.selected:
-            #     pass
-            # if "Permission Scan" in self.selected:
-            #     pass
-            # if "Port Scan" in self.selected:
-            #     pass
-            # if "Remote Scan" in self.selected:
-            #     pass
-            # if "Firewall Rules Scan" in self.selected:
-            #     pass
-            # if "Outdated Software Scan" in self.selected:
-            #     pass
 
         self.content_layout.addStretch()
 

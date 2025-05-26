@@ -52,7 +52,7 @@ class PortScan:
             futures = []
             for port in self.port_range:
                 if self.shutdown_event.is_set():
-                    print(f"Stopped at port: {port}")
+                    # print(f"Stopped at port: {port}")
                     break
                 futures.append(executor.submit(self.scan_port, port))
             
@@ -99,7 +99,7 @@ class PortScan:
         for port in self.open_ports:
             # handle shutdowns
             if self.shutdown_event.is_set():
-                print(f"Stopped at service port: {port}")
+                # print(f"Stopped at service port: {port}")
                 break
             try:
                 service = socket.getservbyport(port)
@@ -150,58 +150,200 @@ class PortScan:
                 'actual_service': actual_service,
                 'reason': 'The service running on this port is not the expected service and is not a trusted process'})
         except Exception as e:
-            print('error', e)
-        
-
+            raise RuntimeError(f"Error while checking service {e}")
 
 
 class FirewallScan:
-    def __init__(self):
-        self.firewall_rules_scan() #temporary, should be changed later
-        
-    def firewall_rules_scan(self):
-        # This function checks what firewall service is available
-        # and prints the list of firewall rules present
-        # ** need a function to process these rules to check
-        #    which rules are bad.
+    def __init__(self, tool = None):
+        if not tool:
+            self.tool = self.detect_firewall()
+        else:
+            self.tool = tool 
+        self.weak_rules = []
 
-        print("\nScanning firewall rules...")
-
-        # Try UFW
-        try:
-            result = subprocess.run(['ufw', 'status'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-            if "inactive" in result.stdout.lower():
-                print("UFW is installed but inactive.")
+    def run_scan(self):
+        if self.tool == "iptables":
+            weak = self.check_iptables_rules()
+            if weak:
+                print("\n[!] Weak iptables rules detected:")
+                for w in weak:
+                    print(f"  - {w}")
             else:
-                print("UFW firewall rules:")
-                print(result.stdout)
-            return
-        except FileNotFoundError:
-            pass # raise/handle error + more errors
+                print("\n[+] No weak rules found in iptables.")
+        elif self.tool == "ufw":
+            weak = self.check_ufw_rules()
+            if weak:
+                print("\n[!] Weak ufw rules detected:")
+                for w in weak:
+                    print(f"  - {w}")
+            else:
+                print("\n[+] No weak rules found in ufw.")
+    
+        elif self.tool == "nftables":
+            weak = self.check_nftables_rules()
+            if weak:
+                print("\n[!] Weak nftables rules detected:")
+                for w in weak:
+                    print(f"  - {w}")
+            else:
+                print("\n[+] No weak rules found in nftables.")
+        else:
+            pass # could not identify firewall tool
 
-        # Try firewalld
+    def run_cmd(self, command):
         try:
-            result = subprocess.run(['firewall-cmd', '--list-all'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-            if result.returncode == 0:
-                print("Firewalld rules:")
-                print(result.stdout)
-                return
-        except FileNotFoundError:
-            pass # raise/handle error + more errors
+            return subprocess.check_output(command, shell=True, text=True, stderr=subprocess.DEVNULL)
+        except subprocess.CalledProcessError:
+            raise RuntimeError('Error while running command')
 
-        # Try iptables
-        try:
-            result = subprocess.run(['iptables', '-L'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-            print("iptables rules:")
-            print(result.stdout)
-        except FileNotFoundError: # raise/handle error + more errors
-            print("No supported firewall tools found (ufw, firewalld, iptables).")
+    def detect_firewall(self):
+        tools = {
+            "iptables": "iptables -L",
+            "ufw": "ufw status",
+            "nftables": "nft list ruleset"
+        }
+        for name, cmd in tools.items():
+            output = self.run_cmd(cmd)
+            if output:
+                detected = name
+                break
+                
+        if not detected:
+            raise RuntimeError('Could not detect a firewall tool')
+        return detected
+
+    def check_iptables_rules(self):
+        rules_output = self.run_cmd("iptables -L -n --line-numbers")
+        weak_rules = []
+
+        for line in rules_output.splitlines():
+            line_lower = line.lower()
+
+            if "accept" in line_lower and ("0.0.0.0/0" in line or "anywhere" in line_lower):
+                # Skip safe rules
+                if any(x in line_lower for x in [
+                    "ctstate related,established",
+                    "icmptype 3",
+                    "icmptype 8",
+                    "icmptype 11",
+                    "icmptype 12",
+                    "udp spt:67 dpt:68",
+                    "udp dpt:5353",
+                    "udp dpt:1900"
+                ]):
+                    continue
+
+                weak_rules.append(f"❗ Rule allows traffic from anywhere: {line.strip()}")
+
+            # Specific ports
+            if "dpt:22" in line and ("0.0.0.0/0" in line or "anywhere" in line_lower):
+                weak_rules.append(f"⚠️ SSH port open to the world: {line.strip()}")
+            if "dpt:23" in line:
+                weak_rules.append(f"⚠️ Telnet port (23) open — insecure protocol: {line.strip()}")
+            if "dpt:3389" in line:
+                weak_rules.append(f"⚠️ RDP port (3389) open — risky on public interfaces: {line.strip()}")
+            if "dpt:21" in line:
+                weak_rules.append(f"⚠️ FTP port (21) open — insecure file transfer: {line.strip()}")
+            if "dpt:80" in line or "dpt:443" in line:
+                weak_rules.append(f"🔎 HTTP/HTTPS port open: {line.strip()}")
+
+            # Allow all ports
+            if re.search(r'dpts?:\s*0:65535', line_lower):
+                weak_rules.append(f"❗ All ports are open in this rule: {line.strip()}")
+
+            # Accept without specifying protocol/source
+            if re.search(r'ACCEPT\s+all\s+--', line):
+                weak_rules.append(f"❗ Accepts all traffic (protocol/source not filtered): {line.strip()}")
+
+        # Check for default policy
+        default_policy_output = self.run_cmd("iptables -S")
+        if "-P INPUT ACCEPT" in default_policy_output:
+            weak_rules.append("⚠️ Default INPUT policy is ACCEPT — should be DROP")
+        if "-P FORWARD ACCEPT" in default_policy_output:
+            weak_rules.append("⚠️ Default FORWARD policy is ACCEPT — should be DROP or REJECT")
+
+        return weak_rules
+
+    def check_ufw_rules(self):
+        rules_output = self.run_cmd("ufw status numbered")
+        weak_rules = []
+
+        print("\n[*] Analyzing UFW rules...\n")
+
+        for line in rules_output.splitlines():
+            line_lower = line.lower()
+
+            if "allow" in line_lower:
+                if "anywhere" in line_lower or "0.0.0.0/0" in line_lower:
+                    weak_rules.append(f"❗ Rule allows traffic from anywhere: {line.strip()}")
+
+                if "22" in line:
+                    weak_rules.append(f"⚠️ SSH port (22) open to the world: {line.strip()}")
+                if "23" in line:
+                    weak_rules.append(f"⚠️ Telnet port (23) open — insecure protocol: {line.strip()}")
+                if "3389" in line:
+                    weak_rules.append(f"⚠️ RDP port (3389) open — risky on public interfaces: {line.strip()}")
+                if "21" in line:
+                    weak_rules.append(f"⚠️ FTP port (21) open — insecure file transfer: {line.strip()}")
+                if "80" in line or "443" in line:
+                    weak_rules.append(f"🔎 HTTP/HTTPS port open: {line.strip()}")
+
+        return weak_rules
+
+    def check_nftables_rules(self):
+        rules_output = self.run_cmd("nft list ruleset")
+        weak_rules = []
+        seen_rules = set()
+
+        print("\n[*] Analyzing nftables rules...\n")
+
+        for line in rules_output.splitlines():
+            line_lower = line.lower().strip()
+
+            # Skip benign rules for localhost interface and related/established connections
+            if re.search(r'(iifname\s+"lo"|oifname\s+"lo")', line_lower):
+                continue
+            if re.search(r'ct state related,established', line_lower):
+                continue
+
+            # Accept all from anywhere with no filters
+            if re.search(r'accept\s*$', line_lower) and not re.search(r'dport|saddr|proto|ip|meta', line_lower):
+                msg = f"❗ Blind ACCEPT rule with no filters: {line.strip()}"
+                if msg not in seen_rules:
+                    weak_rules.append(msg)
+                    seen_rules.add(msg)
+
+            # Accepts traffic from anywhere (saddr any or 0.0.0.0/0)
+            if re.search(r'ip\s+saddr\s+(0\.0\.0\.0/0|any)', line_lower) and "accept" in line_lower:
+                msg = f"❗ Accepts traffic from anywhere: {line.strip()}"
+                if msg not in seen_rules:
+                    weak_rules.append(msg)
+                    seen_rules.add(msg)
+
+            # Ports to check (SSH, Telnet, RDP, FTP, HTTP/HTTPS)
+            ports = {
+                22: "⚠️ SSH port open",
+                23: "⚠️ Telnet port open — insecure protocol",
+                3389: "⚠️ RDP port open — risky",
+                21: "⚠️ FTP port open — insecure",
+                80: "🔎 HTTP port open",
+                443: "🔎 HTTPS port open"
+            }
+
+            for port, alert in ports.items():
+                # Match tcp dport or udp dport (just in case)
+                pattern = rf'(tcp|udp)?\s*dport\s+{port}'
+                if re.search(pattern, line_lower):
+                    msg = f"{alert}: {line.strip()}"
+                    if msg not in seen_rules:
+                        weak_rules.append(msg)
+                        seen_rules.add(msg)
+
+        if not rules_output.strip():
+            weak_rules.append("⚠️ nftables appears to be installed but has no active ruleset.")
+
+        return weak_rules
 
 
-
-
-
-# Plan For Port Service Mappings:
-#     Use socket.getservbyport(port) to check the common service
-#     associated with that port and then use systemctl? to check
-#     if that service is actually running
+# obj = FirewallScan()
+# obj.run_scan()
