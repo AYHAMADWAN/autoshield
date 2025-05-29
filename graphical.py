@@ -486,6 +486,12 @@ class PageThree(QWidget):
                 username = inputs['Port Scan Inputs:'][3]
                 password = inputs['Port Scan Inputs:'][4]
                 key_path = inputs['Port Scan Inputs:'][5]
+                try:
+                    int(start_port)
+                    int(end_port)
+                except Exception:
+                    start_port = -1
+                    end_port = -1
                 port_obj = PortScan(shutdown_event, target=target, start_port = int(start_port), end_port = int(end_port), user = username, password = password, key_path = key_path)
                 self.results.update(port_obj.run_scan())
             if "Remote Scan" in self.selected:

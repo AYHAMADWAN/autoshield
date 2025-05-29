@@ -21,11 +21,20 @@ class PortScan:
         self.key_path = key_path
         self.timeout = timeout
         self.shutdown_event = shutdown_event
-        self.port_range = range(start_port, end_port + 1)
+        try:
+            self.port_range = range(start_port, end_port + 1)
+        except Exception:
+            pass
+        self.start_port = start_port
+        self.end_port = end_port
         self.open_ports = []
         self.suspicious_services = []
         
     def run_scan(self):
+        start_port = self.start_port
+        end_port = self.end_port
+        if start_port == -1 or end_port == -1 or end_port > 65535 or start_port < 0 or end_port < 0 or end_port < start_port:
+            return {'Port Scan Output:': [{'error': 'Invalid Start or End port'}, {'main': 'error'}]}
         if not self.is_valid_ip():
             logger.error('The provided IP Address for remote port scanning is invalid')
             return {'Port Scan Output:': [{'error': 'Invalid IP Address'}, {'main': 'error'}]}
