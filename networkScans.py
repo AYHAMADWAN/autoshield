@@ -106,7 +106,10 @@ class PortScan:
             except OSError:
                 service = "Unknown"
             # print(port)
+            # try:
             self.check_service(service, port)
+            # except Exception as e:
+                # raise RuntimeError(e)
             
     def check_service(self, expected_service, port):
         try:
@@ -141,7 +144,7 @@ class PortScan:
                 return
             if port in trusted and actual_service == trusted[port]:
                 return
-            if expected_service in result.stdout:
+            if expected_service in output:
                 return
 
             self.suspicious_services.append({
@@ -162,33 +165,24 @@ class FirewallScan:
         self.weak_rules = []
 
     def run_scan(self):
-        if self.tool == "iptables":
-            weak = self.check_iptables_rules()
-            if weak:
-                print("\n[!] Weak iptables rules detected:")
-                for w in weak:
-                    print(f"  - {w}")
+        try:
+            # raise RuntimeError('ERROR: TEST')
+            if self.tool == "iptables":
+                self.check_iptables_rules()
+            elif self.tool == "ufw":
+                self.check_ufw_rules()
+            elif self.tool == "nftables":
+                self.check_nftables_rules()
             else:
-                print("\n[+] No weak rules found in iptables.")
-        elif self.tool == "ufw":
-            weak = self.check_ufw_rules()
-            if weak:
-                print("\n[!] Weak ufw rules detected:")
-                for w in weak:
-                    print(f"  - {w}")
+                return {"Firewall Scan Output:": [{'error': f'Could not identify tool {self.tool}'}, {'main': 'error'}]}
+            # self.weak_rules = []
+            if self.weak_rules:
+                self.weak_rules.append({'main': 'rule type'})
+                return {"Firewall Scan Output:": self.weak_rules}
             else:
-                print("\n[+] No weak rules found in ufw.")
-    
-        elif self.tool == "nftables":
-            weak = self.check_nftables_rules()
-            if weak:
-                print("\n[!] Weak nftables rules detected:")
-                for w in weak:
-                    print(f"  - {w}")
-            else:
-                print("\n[+] No weak rules found in nftables.")
-        else:
-            pass # could not identify firewall tool
+                return {"Firewall Scan Output:": [{'main': 'No issues found.'}]}
+        except Exception as e:
+            return {"Firewall Scan Output:": [{'error': e}, {'main': 'error'}]}
 
     def run_cmd(self, command):
         try:
@@ -214,136 +208,219 @@ class FirewallScan:
 
     def check_iptables_rules(self):
         rules_output = self.run_cmd("iptables -L -n --line-numbers")
-        weak_rules = []
 
         for line in rules_output.splitlines():
             line_lower = line.lower()
 
+            # Try to extract the rule line number (first token)
+            tokens = line.strip().split()
+            rule_line = tokens[0] if tokens and tokens[0].isdigit() else None
+
             if "accept" in line_lower and ("0.0.0.0/0" in line or "anywhere" in line_lower):
-                # Skip safe rules
                 if any(x in line_lower for x in [
-                    "ctstate related,established",
-                    "icmptype 3",
-                    "icmptype 8",
-                    "icmptype 11",
-                    "icmptype 12",
-                    "udp spt:67 dpt:68",
-                    "udp dpt:5353",
-                    "udp dpt:1900"
+                    "ctstate related,established", "icmptype 3", "icmptype 8",
+                    "icmptype 11", "icmptype 12", "udp spt:67 dpt:68",
+                    "udp dpt:5353", "udp dpt:1900"
                 ]):
                     continue
+                self.weak_rules.append({
+                    "rule type": "Accept from anywhere",
+                    "description": "Rule allows traffic from any source",
+                    "recommendation": "Restrict source IPs or remove the rule",
+                    "rule line": rule_line,
+                    "raw rule": line.strip()
+                })
 
-                weak_rules.append(f"❗ Rule allows traffic from anywhere: {line.strip()}")
-
-            # Specific ports
             if "dpt:22" in line and ("0.0.0.0/0" in line or "anywhere" in line_lower):
-                weak_rules.append(f"⚠️ SSH port open to the world: {line.strip()}")
+                self.weak_rules.append({
+                    "rule type": "SSH open",
+                    "description": "SSH port open to the world",
+                    "recommendation": "Limit SSH access to specific IPs",
+                    "rule line": rule_line,
+                    "raw rule": line.strip()
+                })
+
             if "dpt:23" in line:
-                weak_rules.append(f"⚠️ Telnet port (23) open — insecure protocol: {line.strip()}")
+                self.weak_rules.append({
+                    "rule type": "Telnet open",
+                    "description": "Telnet (port 23) open — insecure protocol",
+                    "recommendation": "Disable Telnet, use SSH instead",
+                    "rule line": rule_line,
+                    "raw rule": line.strip()
+                })
+
             if "dpt:3389" in line:
-                weak_rules.append(f"⚠️ RDP port (3389) open — risky on public interfaces: {line.strip()}")
+                self.weak_rules.append({
+                    "rule type": "RDP open",
+                    "description": "RDP (port 3389) open — risky on public interfaces",
+                    "recommendation": "Restrict or tunnel RDP through VPN",
+                    "rule line": rule_line,
+                    "raw rule": line.strip()
+                })
+
             if "dpt:21" in line:
-                weak_rules.append(f"⚠️ FTP port (21) open — insecure file transfer: {line.strip()}")
+                self.weak_rules.append({
+                    "rule type": "FTP open",
+                    "description": "FTP (port 21) open — insecure file transfer",
+                    "recommendation": "Use SFTP or FTPS instead",
+                    "rule line": rule_line,
+                    "raw rule": line.strip()
+                })
+
             if "dpt:80" in line or "dpt:443" in line:
-                weak_rules.append(f"🔎 HTTP/HTTPS port open: {line.strip()}")
+                self.weak_rules.append({
+                    "rule type": "Web ports open",
+                    "description": "HTTP/HTTPS ports are open",
+                    "recommendation": "Ensure services are properly secured",
+                    "rule line": rule_line,
+                    "raw rule": line.strip()
+                })
 
-            # Allow all ports
             if re.search(r'dpts?:\s*0:65535', line_lower):
-                weak_rules.append(f"❗ All ports are open in this rule: {line.strip()}")
+                self.weak_rules.append({
+                    "rule type": "All ports open",
+                    "description": "All ports are open in this rule",
+                    "recommendation": "Close unused ports; define specific services",
+                    "rule line": rule_line,
+                    "raw rule": line.strip()
+                })
 
-            # Accept without specifying protocol/source
             if re.search(r'ACCEPT\s+all\s+--', line):
-                weak_rules.append(f"❗ Accepts all traffic (protocol/source not filtered): {line.strip()}")
-
-        # Check for default policy
-        default_policy_output = self.run_cmd("iptables -S")
-        if "-P INPUT ACCEPT" in default_policy_output:
-            weak_rules.append("⚠️ Default INPUT policy is ACCEPT — should be DROP")
-        if "-P FORWARD ACCEPT" in default_policy_output:
-            weak_rules.append("⚠️ Default FORWARD policy is ACCEPT — should be DROP or REJECT")
-
-        return weak_rules
+                self.weak_rules.append({
+                    "rule type": "Accept all",
+                    "description": "Accepts all traffic (protocol/source not filtered)",
+                    "recommendation": "Add filtering rules or drop by default",
+                    "rule line": rule_line,
+                    "raw rule": line.strip()
+                })
 
     def check_ufw_rules(self):
         rules_output = self.run_cmd("ufw status numbered")
-        weak_rules = []
-
-        print("\n[*] Analyzing UFW rules...\n")
 
         for line in rules_output.splitlines():
             line_lower = line.lower()
+            # print(line)
+
+            # Extract rule number from line like: "[ 1] 22                         ALLOW IN    Anywhere"
+            rule_line_match = re.search(r'\[\s*(\d+)\s*\]', line)
+            rule_line = rule_line_match.group(1) if rule_line_match else None
 
             if "allow" in line_lower:
                 if "anywhere" in line_lower or "0.0.0.0/0" in line_lower:
-                    weak_rules.append(f"❗ Rule allows traffic from anywhere: {line.strip()}")
+                    self.weak_rules.append({
+                        "rule type": "Allow from anywhere",
+                        "description": "Allows traffic from any source",
+                        "recommendation": "Restrict allowed IPs or limit access scope",
+                        "rule line": rule_line,
+                        "raw rule": line.strip()
+                    })
 
                 if "22" in line:
-                    weak_rules.append(f"⚠️ SSH port (22) open to the world: {line.strip()}")
-                if "23" in line:
-                    weak_rules.append(f"⚠️ Telnet port (23) open — insecure protocol: {line.strip()}")
-                if "3389" in line:
-                    weak_rules.append(f"⚠️ RDP port (3389) open — risky on public interfaces: {line.strip()}")
-                if "21" in line:
-                    weak_rules.append(f"⚠️ FTP port (21) open — insecure file transfer: {line.strip()}")
-                if "80" in line or "443" in line:
-                    weak_rules.append(f"🔎 HTTP/HTTPS port open: {line.strip()}")
+                    self.weak_rules.append({
+                        "rule type": "SSH open",
+                        "description": "SSH port (22) open to the world",
+                        "recommendation": "Limit SSH access to trusted IPs",
+                        "rule line": rule_line,
+                        "raw rule": line.strip()
+                    })
 
-        return weak_rules
+                if "23" in line:
+                    self.weak_rules.append({
+                        "rule type": "Telnet open",
+                        "description": "Telnet port (23) open — insecure protocol",
+                        "recommendation": "Disable Telnet or replace with SSH",
+                        "rule line": rule_line,
+                        "raw rule": line.strip()
+                    })
+
+                if "3389" in line:
+                    self.weak_rules.append({
+                        "rule type": "RDP open",
+                        "description": "RDP port (3389) open — public access",
+                        "recommendation": "Restrict RDP or tunnel through VPN",
+                        "rule line": rule_line,
+                        "raw rule": line.strip()
+                    })
+
+                if "21" in line:
+                    self.weak_rules.append({
+                        "rule type": "FTP open",
+                        "description": "FTP port (21) open — insecure file transfer",
+                        "recommendation": "Use SFTP or FTPS instead of FTP",
+                        "rule line": rule_line,
+                        "raw rule": line.strip()
+                    })
+
+                if "80" in line or "443" in line:
+                    self.weak_rules.append({
+                        "rule type": "Web open",
+                        "description": "HTTP/HTTPS ports (80/443) are open",
+                        "recommendation": "Ensure web services are secured and necessary",
+                        "rule line": rule_line,
+                        "raw rule": line.strip()
+                    })
 
     def check_nftables_rules(self):
         rules_output = self.run_cmd("nft list ruleset")
-        weak_rules = []
         seen_rules = set()
 
-        print("\n[*] Analyzing nftables rules...\n")
+        if not rules_output.strip():
+            self.weak_rules.append({
+                "rule type": "Empty ruleset",
+                "description": "nftables appears to be installed but has no active ruleset.",
+                "recommendation": "Ensure appropriate firewall policies are configured",
+                "raw rule": None
+            })
+            return
 
         for line in rules_output.splitlines():
             line_lower = line.lower().strip()
 
-            # Skip benign rules for localhost interface and related/established connections
             if re.search(r'(iifname\s+"lo"|oifname\s+"lo")', line_lower):
                 continue
             if re.search(r'ct state related,established', line_lower):
                 continue
 
-            # Accept all from anywhere with no filters
             if re.search(r'accept\s*$', line_lower) and not re.search(r'dport|saddr|proto|ip|meta', line_lower):
-                msg = f"❗ Blind ACCEPT rule with no filters: {line.strip()}"
-                if msg not in seen_rules:
-                    weak_rules.append(msg)
-                    seen_rules.add(msg)
+                msg_key = f"blind_accept::{line.strip()}"
+                if msg_key not in seen_rules:
+                    self.weak_rules.append({
+                        "rule type": "Blind accept",
+                        "description": "Blind ACCEPT rule with no filters",
+                        "recommendation": "Add filters like source address, protocol, or port to restrict traffic",
+                        "raw rule": line.strip()
+                    })
+                    seen_rules.add(msg_key)
 
-            # Accepts traffic from anywhere (saddr any or 0.0.0.0/0)
             if re.search(r'ip\s+saddr\s+(0\.0\.0\.0/0|any)', line_lower) and "accept" in line_lower:
-                msg = f"❗ Accepts traffic from anywhere: {line.strip()}"
-                if msg not in seen_rules:
-                    weak_rules.append(msg)
-                    seen_rules.add(msg)
+                msg_key = f"accept_anywhere::{line.strip()}"
+                if msg_key not in seen_rules:
+                    self.weak_rules.append({
+                        "rule type": "Accept from anywhere",
+                        "description": "Accepts traffic from any IP address",
+                        "recommendation": "Restrict source IPs to only trusted networks",
+                        "raw rule": line.strip()
+                    })
+                    seen_rules.add(msg_key)
 
-            # Ports to check (SSH, Telnet, RDP, FTP, HTTP/HTTPS)
             ports = {
-                22: "⚠️ SSH port open",
-                23: "⚠️ Telnet port open — insecure protocol",
-                3389: "⚠️ RDP port open — risky",
-                21: "⚠️ FTP port open — insecure",
-                80: "🔎 HTTP port open",
-                443: "🔎 HTTPS port open"
+                22: ("SSH open", "SSH port open to the world", "Restrict SSH to trusted IPs"),
+                23: ("Telnet open", "Telnet port open — insecure protocol", "Disable Telnet and use SSH"),
+                3389: ("RDP open", "RDP port open — risky on public networks", "Tunnel RDP through VPN or restrict IPs"),
+                21: ("FTP open", "FTP port open — insecure protocol", "Use SFTP or FTPS instead of FTP"),
+                80: ("HTTP open", "HTTP port open", "Ensure web service is intended and secured"),
+                443: ("HTTPS open", "HTTPS port open", "Ensure HTTPS service is required and secured")
             }
 
-            for port, alert in ports.items():
-                # Match tcp dport or udp dport (just in case)
+            for port, (rule_type, description, recommendation) in ports.items():
                 pattern = rf'(tcp|udp)?\s*dport\s+{port}'
                 if re.search(pattern, line_lower):
-                    msg = f"{alert}: {line.strip()}"
-                    if msg not in seen_rules:
-                        weak_rules.append(msg)
-                        seen_rules.add(msg)
-
-        if not rules_output.strip():
-            weak_rules.append("⚠️ nftables appears to be installed but has no active ruleset.")
-
-        return weak_rules
-
-
-# obj = FirewallScan()
-# obj.run_scan()
+                    msg_key = f"dport_{port}::{line.strip()}"
+                    if msg_key not in seen_rules:
+                        self.weak_rules.append({
+                            "rule type": rule_type,
+                            "description": description,
+                            "recommendation": recommendation,
+                            "raw rule": line.strip()
+                        })
+                        seen_rules.add(msg_key)

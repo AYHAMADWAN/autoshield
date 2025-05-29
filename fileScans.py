@@ -209,6 +209,7 @@ class PAMConfScan:
         # Establish a remote connection with the target
         if self.is_remote:
             try:
+                # raise RuntimeError('ERROR: TEST')
                 self.remote_connection = RemoteDeviceHandling(self.target, self.user, remote_dir_path = [self.pam_dir], remote_file_path = [self.pam_conf_file], password=self.password, key_path = self.key_path)
             except (ValueError, ConnectionError, TimeoutError, RuntimeError) as e:
                 logger.error(str(e))
@@ -226,9 +227,14 @@ class PAMConfScan:
 
                 
             else:
-                return {'Password Scan Output:': [{'main': 'No issues found.'}]}
-        except (FileNotFoundError, IOError, RuntimeError) as e:
+                if not self.is_remote:
+                    return {'Password Scan Output:': [{'main': 'No issues found.'}]}
+                else:
+                    return {'Remote PAM Scan Output:': [{'main': 'No issues found.'}]}
+
+        except (FileNotFoundError, IOError, RuntimeError, Exception) as e:
             return {'Password Scan Output:': [{'error': e}, {'main': 'error'}]}
+
 
     def parse_pam_line(self, line, is_pam_conf):
         """ PARSE A LINE FROM PAM CONFIG FILE AND RETURN IT AS A LIST"""
@@ -389,8 +395,12 @@ class PAMConfScan:
             if os.path.isdir(self.pam_dir):
                 for filename in os.listdir(self.pam_dir):
                     pam_files.append(os.path.join(self.pam_dir, filename))
+            else:
+                raise FileNotFoundError(f"Could Not Find {self.pam_dir}")
             if os.path.isfile(self.pam_conf_file):
                 pam_files.append(self.pam_conf_file)
+            else:
+                raise FileNotFoundError(f"Could Not Find {self.pam_conf_file}")
         return pam_files
 
     def check_pam_config(self):
@@ -399,9 +409,10 @@ class PAMConfScan:
             TO THE ARRAY OF LISTS CALLED issues"""
         try:
             pam_files = self._get_pam_files()
-        except Exception:
-            logger.warning('Could not access pam files')
-            return
+        except FileNotFoundError as e:
+            raise FileNotFoundError(e)
+        except Exception as e:
+            raise RuntimeError('Could not access pam files')
 
         for filepath in pam_files:
             is_pam_conf = (filepath == self.pam_conf_file) # should be same as the input file above
@@ -446,6 +457,7 @@ class FileConfScan:
     def run_scan(self):
         if self.is_remote:
             try:
+                # raise RuntimeError('ERROR: TEST')
                 self.remote_connection = RemoteDeviceHandling(self.target, self.user, remote_dir_path = None, remote_file_path = [self.ssh_config_file], password=self.password, key_path = self.key_path)
             except (ValueError, ConnectionError, TimeoutError, RuntimeError) as e:
                 logger.error(str(e))
@@ -456,8 +468,15 @@ class FileConfScan:
             self.check_sftp_config()
             # THEN OUTPUT ALL THE ISSUES
             # raise Exception("ERROR: TEST")
+            # self.ssh_issues = []
+            # self.apache_issues = []
+            # self.sftp_issues = []
             if not self.ssh_issues and not self.apache_issues and not self.sftp_issues:
-                return {'File Scan Output:': [{'main': 'No issues found.'}]}
+                if not self.is_remote:
+                    return {'File Scan Output:': [{'main': 'No issues found.'}]}
+                else:
+                    return {'Remote File Scan Output:': [{'main': 'No issues found.'}]}
+
 
             issues = self.ssh_issues + self.apache_issues + self.sftp_issues
             issues.append({'main': 'key'})
@@ -474,16 +493,22 @@ class FileConfScan:
                     return
         except Exception as e:
             # logger.error('Configuration scans failed: ', str(e))
-            return {'File Scan Output:': [{'error': e}, {'main': 'error'}]}
+            if not self.is_remote:
+                return {'File Scan Output:': [{'error': e}, {'main': 'error'}]}
+            else:
+                return {'Remote File Scan Output:': [{'error': e}, {'main': 'error'}]}
 
 
     def check_ssh_config(self):
-        if self.is_remote:
-            lines = self.remote_connection.get_remote_file(self.ssh_config_file)
-        else:
-            with open(self.ssh_config_file, "r") as file: # <----------------- HANDLE ERRORS LIKE FILE NOT FOUND
-                lines = file.readlines()
-        
+        try:
+            if self.is_remote:
+                lines = self.remote_connection.get_remote_file(self.ssh_config_file)
+            else:
+                with open(self.ssh_config_file, "r") as file: # <----------------- HANDLE ERRORS LIKE FILE NOT FOUND
+                    lines = file.readlines()
+        except FileNotFoundError:
+            raise FileNotFoundError(f"Could not find file: {self.ssh_config_file}")
+
         for line in lines:
             for rule in SSH_RULES:
                 if len(rule['rule'].split()) == 2:
@@ -506,11 +531,14 @@ class FileConfScan:
                         })
 
     def check_apache_config(self):
-        if self.is_remote:
-            lines = self.remote_connection.get_remote_file(self.apache_config_file)
-        else:
-            with open(self.apache_config_file, "r") as file:
-                lines = file.readlines()
+        try:
+            if self.is_remote:
+                lines = self.remote_connection.get_remote_file(self.apache_config_file)
+            else:
+                with open(self.apache_config_file, "r") as file:
+                    lines = file.readlines()
+        except FileNotFoundError:
+            raise FileNotFoundError(f'Could not find file: {self.apache_config_file}')
 
         for line in lines:
             for rule in APACHE_RULES:
@@ -525,11 +553,14 @@ class FileConfScan:
                     })
 
     def check_sftp_config(self):
-        if self.is_remote:
-            lines = self.remote_connection.get_remote_file(self.ssh_config_file)
-        else:
-            with open(self.ssh_config_file, "r") as file:
-                lines = file.readlines()
+        try:
+            if self.is_remote:
+                lines = self.remote_connection.get_remote_file(self.ssh_config_file)
+            else:
+                with open(self.ssh_config_file, "r") as file:
+                    lines = file.readlines()
+        except FileNotFoundError:
+            raise FileNotFoundError(f"Could not find file: {self.ssh_config_file}")
 
         for line in lines:
             for rule in SFTP_RULES:
@@ -541,33 +572,32 @@ class FileConfScan:
                         'details': rule['details']
                     })
 
-    def optional_fixing(self):
+    def optional_fixing(self, choice = 'yes'):
         # Ask the user if they want to fix issues
-        choice = input("\nWould you like to fix these issues automatically? (yes/no): ").strip().lower()
 
         if choice == "yes":
+            # return
             if self.ssh_issues:
                 self.fix_ssh_config()
             if self.apache_issues:
                 self.fix_apache_config()
             if self.sftp_issues:
                 self.fix_sftp_config()
+            return 'fixed'
         else:
-            print("❌ No changes were made. Please review the issues manually.")
+            # print("❌ No changes were made. Please review the issues manually.")
+            raise RuntimeError('No changes were made')
 
     def fix_ssh_config(self):
-        print("\nApplying secure SSH configurations...")
         os.system("sudo cp /etc/ssh/sshd_config /etc/ssh/sshd_config.bak")  # Backup
-        os.system("sudo sed -i 's/^PermitRootLogin yes/PermitRootLogin no/' /etc/ssh/sshd_config")
+        os.system("sudo sed -i -E 's/^PermitRootLogin [Yy]es/PermitRootLogin no/' /etc/ssh/sshd_config")
         os.system("sudo sed -i 's/^PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config")
         os.system("sudo sed -i 's/^X11Forwarding yes/X11Forwarding no/' /etc/ssh/sshd_config")
         os.system("sudo sed -i 's/^AllowTcpForwarding yes/AllowTcpForwarding no/' /etc/ssh/sshd_config")
         os.system("sudo sed -i 's/^MaxAuthTries [0-9]*/MaxAuthTries 3/' /etc/ssh/sshd_config")
         os.system("sudo systemctl restart ssh")
-        print("✅ SSH configurations updated successfully!")
 
     def fix_apache_config(self):
-        print("\nApplying secure Apache configurations...")
         os.system("sudo cp /etc/apache2/apache2.conf /etc/apache2/apache2.conf.bak")
         os.system("sudo sed -i 's/Options Indexes/Options -Indexes/' /etc/apache2/apache2.conf")
         os.system("sudo sed -i 's/Options FollowSymLinks/Options -FollowSymLinks/' /etc/apache2/apache2.conf")
@@ -583,10 +613,8 @@ class FileConfScan:
         os.system("sudo systemctl restart apache2")
 
     def fix_sftp_config(self):
-        print("\nApplying secure SFTP configurations...")
         os.system("sudo sed -i 's|^Subsystem sftp.*|Subsystem sftp internal-sftp|' /etc/ssh/sshd_config")
         os.system("sudo systemctl restart ssh")
-        print("✅ SFTP configurations updated successfully!")
 
 
 class PermissionScan:
@@ -604,7 +632,9 @@ class PermissionScan:
         except Exception as e:
             return {'Permission Scan Output:': [{'error': e}, {'main': 'error'}]}
 
-        if not self.ww_files and not self.incorrecet_files:
+        # self.ww_files = []
+        # self.incorrect_files = []
+        if not self.ww_files and not self.incorrect_files:
             return {'Permission Scan Output:': [{'main': 'No issues found.'}]}
 
         issues = self.ww_files + self.incorrect_files
@@ -629,24 +659,29 @@ class PermissionScan:
             return False
     
     def find_world_writable_files(self): # try to make it concurrent <-----
-        for root, _, files in os.walk(self.root_dir):
-            # handle shutdowns
-            if self.shutdown_event.is_set():
-                    break
-                
-            for file in files:
+        if not os.path.isdir(self.root_dir):
+            raise FileNotFoundError(f'Error: Directory {self.root_dir} Not found')
+        try:
+            for root, _, files in os.walk(self.root_dir):
                 # handle shutdowns
                 if self.shutdown_event.is_set():
-                    break
+                        break
+                    
+                for file in files:
+                    # handle shutdowns
+                    if self.shutdown_event.is_set():
+                        break
 
-                file_path = os.path.join(root, file)
-                if self.is_world_writable(file_path):
-                    self.ww_files.append({
-                        'file': file_path,
-                        'issue': 'World Writable File',
-                        'owner': self.get_file_owner(file_path),
-                        'permissions': self.get_file_permissions(file_path)
-                    })
+                    file_path = os.path.join(root, file)
+                    if self.is_world_writable(file_path):
+                        self.ww_files.append({
+                            'file': file_path,
+                            'issue': 'World Writable File',
+                            'owner': self.get_file_owner(file_path),
+                            'permissions': self.get_file_permissions(file_path)
+                        })
+        except Exception as e:
+            raise RuntimeError('Error while going through the given directory')
 
     def get_file_owner(self, file_path):
         try:
@@ -694,6 +729,7 @@ class SoftwareScan:
                 return {'Software Scan Output:': [{'error': 'Could not identify package manager'}, {'main': 'error'}]}
             self.check_outdated_software()
             # raise RuntimeError('ERROR: TEST')
+            # self.outdated = []
             if self.outdated:
                 self.outdated.append({'main': 'software'})
                 return {'Software Scan Output:': self.outdated}

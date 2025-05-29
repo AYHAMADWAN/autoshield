@@ -1,6 +1,8 @@
 import os
 import pwd
 from time import sleep
+import threading
+import psutil
 
 SCORES = {
     "internet_connection": 5,
@@ -32,8 +34,8 @@ def get_process_info(pid):
     try:
         try:
             exe_path = os.readlink(f'/proc/{pid}/exe')
-        except OSError as e:
-            exe_path = '[unreadable exe]'
+        except (psutil.AccessDenied, psutil.NoSuchProcess):
+            exe = '[unreadable exe]'
         cmdline = open(f'/proc/{pid}/cmdline', 'r').read().replace('\x00', ' ').strip()
         uid = int(os.stat(f'/proc/{pid}').st_uid)
         user = pwd.getpwuid(uid).pw_name
@@ -47,7 +49,7 @@ def get_process_info(pid):
             }
         }
     except Exception as e:
-        print(f'[WARN] Skipped PID {pid}: {e}')
+        # print(f'[WARN] Skipped PID {pid}: {e}')
         return None
 
 def is_hidden(exe_path):
@@ -81,7 +83,7 @@ def is_suspicious_directory(pid, exe_path):
         print(f'[ERR] Suspicious dir check failed: {e}')
         return False
 
-def is_suspicious_user(user, exe_path, uid):
+def is_suspicious_user(pid, user, exe_path, uid):
     if user in ['nobody', 'daemon', 'sync', 'halt'] and not exe_path.startswith(("/usr", "/bin", "/sbin", "/lib")):
         add_suspicion(pid, 'System user is running a process from an unusual direcyory', SCORES['suspicious_sys_user'], exe_path)
 
@@ -115,9 +117,9 @@ def get_socket_inodes():
 
 # add more and check for more
 trusted_network_exe = ("/usr/sbin/sshd", "/usr/bin/ssh", "/usr/bin/nginx", "/usr/sbin/apache2", "/init", "/usr/lib/systemd", "/usr/bin/udevadm", "/usr/bin/dbus-daemon", "/usr/sbin/rsyslogd", "/usr/bin/login", "/usr/bin/sudo", "/usr/bin/python3.12", "/usr/sbin/cron")
-trusted_file_exe = ("/usr/lib/systemd", "/usr/bin/login", "/usr/bin/python3.12", "/usr/sbin/cron") #change name
-#trusted_network_exe = ('hey')
-#trusted_file_exe = ('hey')
+trusted_file_exe = ("/usr/lib/systemd", "/usr/bin/login", "/usr/bin/python3.12", "/usr/sbin/cron")
+# trusted_network_exe = ()
+# trusted_file_exe = ()
 
 suspicious_write_dirs = ["/tmp", "/dev/shm", "/run"]
 inodes = get_socket_inodes()
@@ -162,7 +164,8 @@ def is_suspicious_behavior(pid, info):
                 add_suspicion(pid, 'Process is using suspicious environment variables that affect shared libraries loading', SCORES['ld_preload'], exe)
 
     except Exception as e:
-        print(f"[WARN] Behavior check failed for PID {pid}: {e}")
+        # print(f"[WARN] Behavior check failed for PID {pid}: {e}")
+        pass
     return False
 
 def has_suspicious_memory_maps(pid, info):
@@ -177,7 +180,8 @@ def has_suspicious_memory_maps(pid, info):
                 if '[anon]' in line and 'x' in line.split()[1]: # executable not backed by a file (usually indicates shellcode loaders or malware)
                     add_suspicion(pid, 'Process is using a hidden executable in memory', SCORES['writable_executable_map'], exe)
     except Exception as e:
-        print(f'[WARN] Memory map check failed for PID {pid}: {e}')
+        # print(f'[WARN] Memory map check failed for PID {pid}: {e}')
+        pass
     return False
 
 def get_cpu_usage(pid):
@@ -203,50 +207,78 @@ def get_cpu_usage(pid):
 
         return cpu_usage
     except Exception as e:
-        print(f"[WARN] CPU usage check failed for PID {pid} : {e}")
+        # print(f"[WARN] CPU usage check failed for PID {pid} : {e}")
         return 0
 
 
 def start_dynamic_scan(shutdown_event):
-    global process_scores
-    suspicious = []
+    try:
+        with open('trusted_exe.txt', 'r') as file:
+            trusted = [line.strip() for line in file]
+    except Exception as e:
+        trusted = []
+    try: 
+        # raise RuntimeError('ERROR: TEST')
+        global process_scores
+        suspicious = []
 
-    for pid in all_pids:
-        info = get_process_info(pid)
-        if not info:
-            continue
-        exe = info['exe']
-        user = info['user']['username']
-        uid = info['user']['uid']
-
-        is_suspicious_directory(pid, exe)
-        is_suspicious_user(user, exe, uid)
-        is_suspicious_behavior(pid, info)
-        has_suspicious_memory_maps(pid, info)
-        cpu = get_cpu_usage(pid)
-        if cpu > 70 and user != "root":
-            add_suspicion(pid, 'Suspiciously high cpu usage by a process', 'high_cpu_usage', exe)
-
-        if '(deleted)' in exe or '[unreadable exe]' in exe:
-            add_suspicion(pid, 'The process is running a deleted or unreadable executable file', "deleted_or_unreadable_exe", exe)
-        
-        for pid, data in sorted(process_scores.items(), key=lambda x: x[1]["score"], reverse=True):
-            if not data or not pid:
+        for pid in all_pids:
+            info = get_process_info(pid)
+            if not info:
                 continue
-            # print(f"⚠️ PID {pid} | {data['exe']} | Score: {data['score']}")
-            # for reason in data["reasons"]:
-            suspicious.append({
-                'PID': pid,
-                'Executable': data['exe'],
-                'Score': data['score'],
-                'Reasons': " || ".join(data['reasons'])
-            })
-                # print(f"  └─ {reason}")
-        
-        process_scores = {}
-        if shutdown_event.is_set():
-            break
+            exe = info['exe']
+            user = info['user']['username']
+            uid = info['user']['uid']
 
-        # insert logic to delete previous output and get new output on gui <---------------------
-    suspicious.append({'main': 'Executable'})
-    return {'Process Scan Output:': suspicious}
+            if exe in trusted:
+                continue
+
+            is_suspicious_directory(pid, exe)
+            is_suspicious_user(pid, user, exe, uid)
+            is_suspicious_behavior(pid, info)
+            has_suspicious_memory_maps(pid, info)
+            # add_suspicion(pid, 'TEST', SCORES['high_cpu_usage'], exe)
+            cpu = get_cpu_usage(pid)
+            if cpu > 70 and user != "root":
+                add_suspicion(pid, 'Suspiciously high cpu usage by a process', SCORES['high_cpu_usage'], exe)
+
+            if '(deleted)' in exe or '[unreadable exe]' in exe:
+                add_suspicion(pid, 'The process is running a deleted or unreadable executable file', SCORES["deleted_or_unreadable_exe"], exe)
+            
+            for pid, data in sorted(process_scores.items(), key=lambda x: x[1]["score"], reverse=True):
+                if not data or not pid:
+                    continue
+                # print(f"⚠️ PID {pid} | {data['exe']} | Score: {data['score']}")
+                # for reason in data["reasons"]:
+                suspicious.append({
+                    'PID': pid,
+                    'Executable': data['exe'],
+                    'Score': data['score'],
+                    'Reasons': " || ".join(data['reasons'])
+                })
+                    # print(f"  └─ {reason}")
+            
+            process_scores = {}
+            if shutdown_event.is_set():
+                break
+
+            # insert logic to delete previous output and get new output on gui <---------------------
+        suspicious.append({'main': 'Executable'})
+        return {'Process Scan Output:': suspicious}
+    except Exception as e:
+        return {'Process Scan Output:': [{'error': e},{'main':'error'}]}
+
+def add_to_trusted(exe):
+    try:
+        with open('trusted_exe.txt', 'a+') as file:
+            file.seek(0, os.SEEK_END)  # Move to the end of the file
+            if file.tell() > 0:  # If file is not empty
+                file.seek(file.tell() - 1)
+                last_char = file.read(1)
+                if last_char != '\n':
+                    file.write('\n')
+            file.write(exe + '\n')
+    except FileNotFoundError:
+        pass
+    except Exception as e:
+        return

@@ -1,5 +1,5 @@
-import sys
 import os
+import sys
 import threading
 import signal
 from PyQt6.QtWidgets import (
@@ -11,8 +11,12 @@ from PyQt6.QtGui import QPixmap
 from PyQt6.QtCore import Qt
 
 from fileScans import PAMConfScan, FileConfScan, PermissionScan, SoftwareScan
-from networkScans import PortScan
+from networkScans import PortScan, FirewallScan
 import dynamic
+
+if os.getuid() != 0:
+    print("Need elevated privileges")
+    sys.exit(1)
 
 shutdown_event = threading.Event()
 def handle_signal(signum, frame):
@@ -28,7 +32,7 @@ class PageOne(QWidget):
         layout = QVBoxLayout()
 
         self.banner = QLabel(self)
-        pixmap = QPixmap("Logo 1.jpg").scaledToWidth(180)
+        pixmap = QPixmap("Logo 1.jpg")#.scaledToWidth(180)
         self.banner.setPixmap(pixmap)
         self.banner.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         layout.addWidget(self.banner)
@@ -76,7 +80,7 @@ class PageOne(QWidget):
         layout.addWidget(self.next_button)
 
         self.setLayout(layout)
-        self.setStyleSheet("background-color: #121212; color: #ffffff;")
+        self.setStyleSheet("background-color: #000000; color: #ffffff;")
 
     def go_to_next(self):
         selected = []
@@ -326,7 +330,7 @@ class PageTwo(QWidget):
 
             firewall_tool_text = QLabel("Firewall Tool")
             firewall_tool_input = QLineEdit()
-            firewall_tool_input.setPlaceholderText("[iptables | ufw | firewall-cmd]")
+            firewall_tool_input.setPlaceholderText("[iptables | ufw | nftables]")
             
             spacer_text1 = QLabel("", self, styleSheet = "background: transparent;")
             spacer_text2 = QLineEdit("", self, styleSheet = "background: transparent;")
@@ -351,7 +355,7 @@ class PageTwo(QWidget):
 
             outdated_tool_text = QLabel("Package Tool")
             outdated_tool_input = QLineEdit()
-            outdated_tool_input.setPlaceholderText("[apt | yum | dnf | pacman]")
+            outdated_tool_input.setPlaceholderText("[apt]")
             
             spacer_text1 = QLabel("", self, styleSheet = "background: transparent;")
             spacer_text2 = QLineEdit("", self, styleSheet = "background: transparent;")
@@ -443,13 +447,6 @@ class PageThree(QWidget):
         content_widget = QWidget()
         self.content_layout = QVBoxLayout(content_widget)
 
-        # Add buttons to content layout
-        # for num in range(1, 100):
-        #     button = QPushButton(f"Number {num}")
-        #     button.clicked.connect(lambda _, n=num: self.openWindow(f"Number {n}"))
-        #     content_layout.addWidget(button)
-
-
         self.back_home = QPushButton("Back to Home")
         self.back_home.clicked.connect(lambda: self.stacked_widget.setCurrentIndex(0))
 
@@ -476,8 +473,8 @@ class PageThree(QWidget):
             if "Config Scan" in self.selected:
                 ssh_file = inputs['File Config Inputs:'][0]
                 apache_file = inputs['File Config Inputs:'][1]
-                config_obj = FileConfScan(ssh_config_file = ssh_file, apache_config_file = apache_file)
-                self.results.update(config_obj.run_scan())
+                self.config_obj = FileConfScan(ssh_config_file = ssh_file, apache_config_file = apache_file)
+                self.results.update(self.config_obj.run_scan())
             if "Permission Scan" in self.selected:
                 root_dir = inputs['Permission Scan Inputs:'][0]
                 perm_obj = PermissionScan(shutdown_event, root_dir=root_dir)
@@ -511,7 +508,8 @@ class PageThree(QWidget):
             
             if "Firewall Rules Scan" in self.selected:
                 tool = inputs['Firewall Scan Inputs:'][0]
-                pass # <---- call firewall scan
+                firewall_obj = FirewallScan(tool)
+                self.results.update(firewall_obj.run_scan())
 
             if "Outdated Software Scan" in self.selected:
                 tool = inputs['Outdated Software Scan Inputs:'][0]
@@ -542,14 +540,48 @@ class PageThree(QWidget):
                 error_label = QLabel(str(error))
                 error_label.setStyleSheet("QLabel {font-size: 20px; color: white; background: transparent}")
                 self.content_layout.addWidget(error_label)
+            elif title == 'Process Scan Output:':
+                for output in outputs[0:-1]:
+                    temp_layout = QHBoxLayout()
+
+                    button1 = QPushButton(output[main])
+                    button1.clicked.connect(lambda _, t=title, n=output: self.openWindow(t, n))
+                    button1.setStyleSheet('QPushButton{font-size: 20px}')
+
+                    button2 = QPushButton('Trust')
+                    button2.setStyleSheet('QPushButton { font-size: 20px; max-width: 100px; }')
+
+                    exe_value = output[main]  # capture value to avoid late binding
+
+                    def trust(btn, exe):
+                        dynamic.add_to_trusted(exe)
+                        btn.setText('Trusted')
+
+                    # DO NOT call `trust(...)` here directly!
+                    button2.clicked.connect(lambda _, b=button2, e=exe_value: trust(b, e))
+
+                    temp_layout.addWidget(button1)
+                    temp_layout.addWidget(button2)
+                    self.content_layout.addLayout(temp_layout)
             else:
                 for output in outputs[0:-1]:
                     button = QPushButton(output[main])
                     button.clicked.connect(lambda _, t=title, n=output: self.openWindow(title, n))
                     button.setStyleSheet('QPushButton{font-size: 20px}')
                     self.content_layout.addWidget(button)
-
+            if title == 'File Scan Output:':
+                self.fix_button = QPushButton('Fix Issues?')
+                self.fix_button.clicked.connect(self.fix)
+                self.fix_button.setStyleSheet('QPushButton{font-size: 20px}')
+                self.content_layout.addWidget(self.fix_button)
         self.content_layout.addStretch()
+    def fix(self):
+        try:
+            result = self.config_obj.optional_fixing()
+            if result == 'fixed':
+                self.fix_button.setText('Fixed!')
+        except Exception as e:
+            self.fix_button.setText('Error')
 
     def openWindow(self, title, data):
         self.new_window = DetailsWindow(title, data)
