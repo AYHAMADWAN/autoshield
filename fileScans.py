@@ -233,6 +233,10 @@ class PAMConfScan:
                     return {'Remote PAM Scan Output:': [{'main': 'No issues found.'}]}
 
         except (FileNotFoundError, IOError, RuntimeError, Exception) as e:
+            try:
+                logger.error(str(e))
+            except Exception as e:
+                pass
             return {'Password Scan Output:': [{'error': e}, {'main': 'error'}]}
 
 
@@ -492,6 +496,10 @@ class FileConfScan:
                     logger.error('Fixing misconfigurations failed: ', str(e))
                     return
         except Exception as e:
+            try:
+                logger.error(str(e))
+            except Exception as e:
+                pass
             # logger.error('Configuration scans failed: ', str(e))
             if not self.is_remote:
                 return {'File Scan Output:': [{'error': e}, {'main': 'error'}]}
@@ -630,6 +638,10 @@ class PermissionScan:
             self.find_world_writable_files()
             self.find_sensitive_files_with_issues()
         except Exception as e:
+            try:
+                logger.error(str(e))
+            except Exception as e:
+                pass
             return {'Permission Scan Output:': [{'error': e}, {'main': 'error'}]}
 
         # self.ww_files = []
@@ -736,6 +748,10 @@ class SoftwareScan:
             else:
                 return {'Software Scan Output:': [{'main': 'No issues found.'}]}
         except Exception as e:
+            try:
+                logger.error(str(e))
+            except Exception as e:
+                pass
             return {'Software Scan Output:': [{'error': e}, {'main': 'error'}]}
 
     def get_distro_id(self):

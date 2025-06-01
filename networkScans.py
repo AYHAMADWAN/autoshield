@@ -9,7 +9,7 @@ import os
 from other import RemoteDeviceHandling
 
 
-trusted = {22: 'sshd'}
+trusted = {}
 # set up the logging handler:
 logger = setup_logger()
 
@@ -53,6 +53,10 @@ class PortScan:
             else:
                 return {'Port Scan Output:': [{'main': 'No issues found.'}]}
         except Exception as e:
+            try:
+                logger.error(str(e))
+            except Exception as e:
+                pass
             return {'Port Scan Output:': [{'error': e}, {'main': 'error'}]}
 
     def scan_ports(self):
@@ -191,6 +195,10 @@ class FirewallScan:
             else:
                 return {"Firewall Scan Output:": [{'main': 'No issues found.'}]}
         except Exception as e:
+            try:
+                logger.error(str(e))
+            except Exception as e:
+                pass
             return {"Firewall Scan Output:": [{'error': e}, {'main': 'error'}]}
 
     def run_cmd(self, command):
